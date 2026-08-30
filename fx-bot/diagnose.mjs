@@ -31,6 +31,12 @@ const TARGETS = [
   },
   {
     group: "환율",
+    name: "네이버 마켓인덱스 목록",
+    url: "https://api.stock.naver.com/marketindex/major",
+    pick: (j) => j?.find?.((r) => r?.reutersCode === "FX_USDKRW")?.closePrice,
+  },
+  {
+    group: "환율",
     name: "네이버 polling",
     url: "https://polling.finance.naver.com/api/realtime/marketindex/exchange/FX_USDKRW",
     pick: (j) => j?.result?.areas?.[0]?.datas?.[0]?.nv ?? j?.datas?.[0]?.nv,
@@ -112,7 +118,9 @@ async function probe(target) {
     } catch {
       return { ...target, ok: false, ms, detail: `JSON 아님: ${text.slice(0, 80)}` };
     }
-    if (value == null) return { ...target, ok: false, ms, detail: `값 없음: ${text.slice(0, 100)}` };
+    // 200 인데 값을 못 뽑은 건 "막혔다"가 아니라 "내가 필드를 잘못 짚었다"는 뜻이다.
+    // 그때는 응답을 넉넉히 보여줘야 다음 시도에서 제대로 짚는다.
+    if (value == null) return { ...target, ok: false, ms, reachable: true, detail: `값 없음 ↓\n   ${text.slice(0, 700)}` };
     return { ...target, ok: true, ms, detail: String(value) };
   } catch (error) {
     // fetch failed = DNS·TCP·TLS 단계에서 막힘 (해외 IP 차단이 보통 이렇게 보인다)
