@@ -1,0 +1,44 @@
+# 💱 환율·테더 차익 알림 봇
+
+달러(USD/KRW)와 테더(USDT/KRW)를 함께 보다가 갈아탈 만한 폭이 벌어지면
+텔레그램으로 알립니다. **GitHub Actions 가 매시 정각에 봇을 켜서 55분간
+1분 주기로 감시**하다 스스로 종료합니다 — 서버가 필요 없습니다.
+
+전략과 계산식, 텔레그램 명령, 임계값 조정은 **[fx-bot/README.md](fx-bot/README.md)** 에 있습니다.
+
+## 켜는 법
+
+1. **Settings → Secrets and variables → Actions → New repository secret**
+   - `TELEGRAM_BOT_TOKEN` — [@BotFather](https://t.me/BotFather) 에서 `/newbot`
+   - `TELEGRAM_CHAT_ID` — 봇과 대화창을 연 뒤
+     `curl -s "https://api.telegram.org/bot<토큰>/getUpdates" | grep -o '"chat":{"id":[-0-9]*'`
+2. **Actions 탭 → I understand my workflows, go ahead and enable them**
+3. **Actions → 환율·테더 감시 → Run workflow** 로 한 번 돌려 확인
+   (`dry_run: true` 로 하면 텔레그램 전송 없이 로그로만 봅니다)
+
+이후 매시 정각에 자동으로 돕니다.
+
+## 내 우대율에 맞추기
+
+은행 환율은 `매매기준율 × (1 ± 스프레드 × (1 − 우대율))` 모형입니다.
+`fx-bot/config.example.json` 을 `fx-bot/config.json` 으로 복사해 우대율과
+임계값을 고쳐 **커밋**하세요 (없으면 예시 설정으로 돕니다).
+
+앱에 찍힌 실제 환율과 다르면 텔레그램에서 `/시세입력 토스 매도 1391.2`,
+우대율 자체가 바뀌었으면 `/우대 스위치원 매수 90` 으로 맞춥니다.
+
+## 알아둘 것
+
+- 상태(쿨다운·시세 기록)는 `fx-bot-state` 브랜치에 1커밋으로 유지됩니다.
+  지우면 알림이 한 번 더 올 수 있습니다.
+- 저장소가 **60일간 활동이 없으면 GitHub 이 스케줄을 자동으로 끕니다.**
+  상태 커밋이 매시간 올라가니 보통은 걸리지 않습니다.
+- 스케줄은 부하에 따라 몇 분 밀립니다. 상주 55분이 그 구멍을 덮습니다.
+- **비공개 저장소로 옮기지 마세요.** Actions 무료 한도(월 2,000분)를 하루 만에
+  씁니다. 공개 저장소는 무제한입니다.
+
+## 면책
+
+봇은 시세를 계산해 알려줄 뿐 **주문을 내지 않습니다.** 은행 환율은 모형이고
+거래소 호가는 순간값이라, 알림 시점과 체결 시점의 값은 다를 수 있습니다.
+매매 판단과 결과는 본인 책임입니다.

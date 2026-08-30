@@ -1,0 +1,8 @@
+node_modules/
+
+# 개인 설정·시세 기록·알림 쿨다운·토큰
+/fx-bot/config.json
+/fx-bot/state.json
+/fx-bot/state.json.tmp
+/fx-bot/deploy/fx-bot.env
+/state.json

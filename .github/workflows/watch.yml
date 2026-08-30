@@ -1,0 +1,125 @@
+name: 환율·테더 감시
+
+# GitHub Actions 안에서 봇을 **상주**시킨다.
+#
+# 매시 정각에 켜서 55분간 1분 주기로 감시하다 스스로 종료한다. 5분마다 단발
+# 실행하는 것보다 이쪽이 훨씬 낫다.
+#   - 단발 실행은 스케줄이 밀리면 그대로 구멍이 난다. 상주는 그 안에서 계속 본다
+#   - 분 단위로 열렸다 닫히는 차익을 실제로 잡을 수 있다
+#   - 텔레그램 명령(/시세 …)이 그 시간 동안 즉시 응답한다
+#   - 과금은 실행 시간 기준이라, **공개 저장소(무료 무제한)에서만** 쓸 것
+#
+# ⚠️ 비공개 저장소에 두면 무료 한도(월 2,000분)를 하루 만에 씁니다.
+#    비공개로 써야 한다면 schedule 을 "*/30 * * * *" 로, 실행 명령을
+#    `node fx-bot/index.mjs --once` 로 바꾸세요 (기회는 대부분 놓칩니다).
+
+on:
+  schedule:
+    # 매시 정각(UTC). 상주 시간이 55분이라 정각마다 이어달리기가 된다.
+    - cron: "0 * * * *"
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: "이번 실행을 몇 분간 유지할지"
+        required: false
+        default: "55"
+        type: string
+      dry_run:
+        description: "텔레그램으로 보내지 않고 로그로만"
+        required: false
+        default: false
+        type: boolean
+
+# 앞 실행이 안 끝났는데 다음이 시작되면 텔레그램 롱폴링이 충돌한다(409).
+# 겹치면 새 실행을 기다리게 둔다.
+concurrency:
+  group: fx-bot-watch
+  cancel-in-progress: false
+
+# 상태(쿨다운·시세 기록)를 fx-bot-state 브랜치에 남기려면 쓰기 권한이 필요하다.
+permissions:
+  contents: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    # 55분 상주 + 여유. 러너가 강제로 끊기 전에 봇이 스스로 나가야 한다.
+    timeout-minutes: 58
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # 봇은 외부 의존성이 없다 (Node 내장 fetch 만 쓴다). npm ci 가 필요 없다.
+
+      - name: 시크릿 확인
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "::error::Settings → Secrets and variables → Actions 에 TELEGRAM_BOT_TOKEN 과 TELEGRAM_CHAT_ID 를 넣어주세요."
+            exit 1
+          fi
+
+      - name: 설정 준비
+        run: |
+          if [ ! -f fx-bot/config.json ]; then
+            cp fx-bot/config.example.json fx-bot/config.json
+            echo "fx-bot/config.json 이 없어 예시 설정으로 돕니다. 우대율을 본인 값으로 고치고 커밋하세요."
+          fi
+
+      # 상태를 전용 브랜치에 둔다. actions/cache 는 7일 미사용이면 사라지고
+      # 용량 압박을 받으면 먼저 버려진다 — 그러면 같은 알림이 다시 오고
+      # 급변동 판정에 쓸 기록도 비어버린다. 브랜치는 그런 일이 없다.
+      - name: 상태 복원
+        run: |
+          git fetch --depth=1 origin fx-bot-state 2>/dev/null || true
+          if git cat-file -e FETCH_HEAD:state.json 2>/dev/null; then
+            git show FETCH_HEAD:state.json > state.json
+            echo "상태 복원: $(wc -c < state.json) bytes"
+          else
+            echo "이전 상태 없음 — 처음 실행이거나 브랜치가 아직 없습니다."
+          fi
+
+      - name: 감시 (상주)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FX_BOT_STATE: ${{ github.workspace }}/state.json
+          MINUTES: ${{ inputs.minutes || '55' }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          ARGS="--max-runtime $((MINUTES * 60)) --no-hello"
+          [ "$DRY_RUN" = "true" ] && ARGS="$ARGS --dry-run"
+          echo "node fx-bot/index.mjs $ARGS"
+          node fx-bot/index.mjs $ARGS
+
+      # 실행이 실패해도 그때까지의 기록은 남긴다. 히스토리는 항상 1커밋으로
+      # 강제 갱신한다 — 시간당 한 번씩 쌓이면 저장소가 커진다.
+      - name: 상태 저장
+        if: always()
+        run: |
+          if [ ! -f state.json ]; then
+            echo "저장할 상태가 없습니다."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # --orphan 은 같은 이름의 로컬 브랜치가 있으면 실패한다. 호스티드
+          # 러너는 매번 새 워크스페이스라 없지만, 셀프호스티드는 재사용한다.
+          git branch -D fx-bot-state 2>/dev/null || true
+          git checkout -q --orphan fx-bot-state
+          git rm -rq --cached . 2>/dev/null || true
+          git add -f state.json
+          git commit -qm "state: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          for attempt in 1 2 3; do
+            if git push -f origin fx-bot-state; then exit 0; fi
+            echo "push 실패 — 다시 시도 ($attempt)"
+            sleep $((attempt * 5))
+          done
+          echo "::warning::상태를 저장하지 못했습니다. 다음 실행에서 알림이 한 번 더 올 수 있습니다."

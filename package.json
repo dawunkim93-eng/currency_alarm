@@ -1,0 +1,16 @@
+{
+  "name": "fx-alert-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "환율·테더(USDT) 차익 알림 텔레그램 봇",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "fx-bot": "node fx-bot/index.mjs",
+    "fx-bot:once": "node fx-bot/index.mjs --once",
+    "fx-bot:dry": "node fx-bot/index.mjs --dry-run",
+    "fx-preview": "node fx-bot/preview.mjs",
+    "test-fx": "node fx-bot/test-signals.mjs",
+    "test": "node fx-bot/test-signals.mjs"
+  }
+}
