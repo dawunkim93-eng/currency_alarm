@@ -8,15 +8,19 @@
 
 ## 켜는 법
 
+워크플로는 푸시와 동시에 활성화돼 **매시 정각에 자동으로 돕니다.** 시크릿만
+넣으면 됩니다.
+
 1. **Settings → Secrets and variables → Actions → New repository secret**
    - `TELEGRAM_BOT_TOKEN` — [@BotFather](https://t.me/BotFather) 에서 `/newbot`
    - `TELEGRAM_CHAT_ID` — 봇과 대화창을 연 뒤
      `curl -s "https://api.telegram.org/bot<토큰>/getUpdates" | grep -o '"chat":{"id":[-0-9]*'`
-2. **Actions 탭 → I understand my workflows, go ahead and enable them**
-3. **Actions → 환율·테더 감시 → Run workflow** 로 한 번 돌려 확인
+2. **Actions → 환율·테더 감시 → Run workflow** 로 한 번 돌려 확인
    (`dry_run: true` 로 하면 텔레그램 전송 없이 로그로만 봅니다)
 
-이후 매시 정각에 자동으로 돕니다.
+> ⏰ 시크릿을 넣기 전에 정각이 지나면 그 실행은 **실패**합니다(그게 맞습니다 —
+> 조용히 성공한 척하면 봇이 안 도는 걸 모릅니다). 바로 넣지 못할 상황이면
+> Actions → 환율·테더 감시 → `⋯` → Disable workflow 로 잠시 꺼 두세요.
 
 ## 내 우대율에 맞추기
 
