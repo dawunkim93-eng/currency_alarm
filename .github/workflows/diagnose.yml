@@ -1,0 +1,27 @@
+name: 시세 출처 진단
+
+# 러너에서 어떤 시세 API 가 열리는지 실제로 재본다.
+#
+# 국내 시세 API 중에는 해외 IP(GitHub 러너는 대개 미국·유럽)를 막는 곳이 있다.
+# 짐작으로 출처를 고르면 "알림이 왜 안 오지"를 며칠 헤매게 되므로, 봇을 돌릴
+# 바로 그 환경에서 재보고 되는 것 중에 고른다.
+#
+# 비밀값이 필요 없고 수동 실행 전용이다.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: 도달성 측정
+        run: node fx-bot/diagnose.mjs
