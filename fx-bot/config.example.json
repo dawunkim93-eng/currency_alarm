@@ -2,14 +2,47 @@
   "pollSeconds": 60,
   "notional": 10000000,
   "banks": {
-    "toss": { "label": "토스뱅크", "spread": null, "prefBuy": 1.0, "prefSell": 1.0 },
-    "kakaobank": { "label": "카카오뱅크", "spread": null, "prefBuy": 1.0, "prefSell": 1.0 },
-    "switchen": { "label": "스위치원", "spread": null, "prefBuy": 0.95, "prefSell": 0.95 },
-    "hana": { "label": "하나은행", "spread": null, "prefBuy": 0.9, "prefSell": 0.9 }
+    "toss": {
+      "label": "토스뱅크",
+      "spread": null,
+      "prefBuy": 1.0,
+      "prefSell": 1.0
+    },
+    "kakaobank": {
+      "label": "카카오뱅크",
+      "spread": null,
+      "prefBuy": 1.0,
+      "prefSell": 1.0
+    },
+    "switchen": {
+      "label": "스위치원",
+      "spread": null,
+      "prefBuy": 0.95,
+      "prefSell": 0.95
+    },
+    "hana": {
+      "label": "하나은행",
+      "spread": null,
+      "prefBuy": 0.9,
+      "prefSell": 0.9
+    }
   },
   "exchanges": {
-    "upbit": { "label": "업비트", "takerFee": 0.0005, "enabled": true },
-    "bithumb": { "label": "빗썸", "takerFee": 0.0004, "enabled": true }
+    "upbit": {
+      "label": "업비트",
+      "takerFee": 0.0005,
+      "enabled": true
+    },
+    "bithumb": {
+      "label": "빗썸",
+      "takerFee": 0.0004,
+      "enabled": true
+    },
+    "coinone": {
+      "label": "코인원",
+      "takerFee": 0.002,
+      "enabled": false
+    }
   },
   "thresholds": {
     "toTetherPct": 0.3,
@@ -29,7 +62,13 @@
   },
   "digest": {
     "everyMinutes": 60,
-    "quietHours": { "from": 23, "to": 7, "muteAlerts": false }
+    "quietHours": {
+      "from": 23,
+      "to": 7,
+      "muteAlerts": false
+    }
   },
-  "telegram": { "commands": true }
+  "telegram": {
+    "commands": true
+  }
 }

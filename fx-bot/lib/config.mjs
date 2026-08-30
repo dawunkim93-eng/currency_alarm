@@ -44,6 +44,10 @@ export const DEFAULTS = {
     /** 원화마켓 테이커 수수료(비율). 쿠폰·등급에 따라 다르니 본인 값으로 고칠 것. */
     upbit: { label: "업비트", takerFee: 0.0005, enabled: true },
     bithumb: { label: "빗썸", takerFee: 0.0004, enabled: true },
+    // 코인원도 러너에서 열리는 걸 확인했다(diagnose). 다만 수수료가 등급·쿠폰에
+    // 따라 크게 달라서, 본인 값을 확인하고 켜라고 꺼둔다 — 수수료를 틀리게 넣으면
+    // 없는 차익이 있다고 나온다.
+    coinone: { label: "코인원", takerFee: 0.002, enabled: false },
   },
 
   thresholds: {

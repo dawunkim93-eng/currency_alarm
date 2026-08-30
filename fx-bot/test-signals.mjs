@@ -14,10 +14,13 @@ import assert from "node:assert/strict";
 import { DEFAULTS, deepMerge, validateConfig } from "./lib/config.mjs";
 import {
   parseBithumbLegacyOrderbook,
+  parseCoinoneOrderbook,
   parseDunamuForex,
-  parseNaverForex,
+  parseErApi,
+  parseNaverExchange,
   parseUpbitStyleOrderbook,
   parseUpbitTicker,
+  parseYahooChart,
 } from "./lib/sources.mjs";
 import { buildQuotes, derivedSpreads } from "./lib/venues.mjs";
 import { evaluate, findAnchor, selectAlerts } from "./lib/signals.mjs";
@@ -137,13 +140,63 @@ test("basePrice 가 없으면 조용히 0 을 쓰지 않고 던진다", () => {
   assert.throws(() => parseDunamuForex([{ currencyCode: "USD" }]), /basePrice/);
 });
 
-test("네이버 대체 경로는 쉼표 붙은 문자열 가격을 읽는다", () => {
-  const forex = parseNaverForex({
-    result: { marketIndexPrices: [{ closePrice: "1,390.50", fluctuationsRatio: "-0.15" }] },
+// 아래 세 픽스처는 GitHub Actions 러너에서 실제로 받아온 응답이다
+// (`node fx-bot/diagnose.mjs`, 2026-08-31). 손으로 지어낸 모양으로 검증하다
+// 필드를 잘못 짚어 "값 없음"으로 돌던 적이 있어서, 원문을 그대로 박아둔다.
+test("네이버 하나은행 고시에서 매매기준율을 읽는다", () => {
+  const forex = parseNaverExchange({
+    exchangeInfo: {
+      stockExchangeType: { code: "HANA", nameKor: "하나은행", nationType: "KOR" },
+      categoryType: "exchange",
+      reutersCode: "FX_USDKRW",
+      description: "하나은행 고시회차",
+      localTradedAt: "2026-08-31T07:38:01+09:00",
+      closePrice: "1,381.00", // 쉼표가 붙어 온다
+      fluctuations: "-1.00",
+      fluctuationsRatio: "-0.07",
+      marketStatus: "OPEN",
+    },
   });
-  assert.equal(forex.base, 1390.5);
-  assert.equal(forex.changePct, -0.15);
+  assert.equal(forex.base, 1381);
+  assert.equal(forex.changePct, -0.07);
+  assert.equal(forex.changePrice, -1);
+  assert.match(forex.provider, /하나은행/);
   assert.equal(forex.ttSelling, null); // 전신환 고시가 없으니 스프레드는 설정값으로 메운다
+});
+
+test("야후 KRW=X 에서 시장 중간값과 등락을 읽는다", () => {
+  const forex = parseYahooChart({
+    chart: {
+      result: [{ meta: { regularMarketPrice: 1377.66, chartPreviousClose: 1380.0, regularMarketTime: 1788131691 } }],
+      error: null,
+    },
+  });
+  assert.equal(forex.base, 1377.66);
+  assert.ok(Math.abs(forex.changePct - -0.1696) < 0.001, `${forex.changePct}`);
+  assert.equal(forex.source, "yahoo");
+});
+
+test("er-api 는 값만 주고 등락은 없다", () => {
+  const forex = parseErApi({ result: "success", rates: { KRW: 1377.900275 }, time_last_update_unix: 1788100000 });
+  assert.equal(forex.base, 1377.900275);
+  assert.equal(forex.changePct, null);
+});
+
+test("환율 출처가 하나라도 값을 못 주면 던진다", () => {
+  assert.throws(() => parseNaverExchange({ exchangeInfo: { closePrice: null } }), /환율/);
+  assert.throws(() => parseYahooChart({ chart: { result: [] } }), /환율/);
+  assert.throws(() => parseErApi({ rates: {} }), /환율/);
+});
+
+test("코인원 호가창은 {price, qty} 문자열 배열이다", () => {
+  const book = parseCoinoneOrderbook({
+    result: "success",
+    timestamp: 1788131691211,
+    asks: [{ price: "1390", qty: "1000" }],
+    bids: [{ price: "1389", qty: "2000" }],
+  });
+  assert.equal(book.ask, 1390);
+  assert.equal(book.bid, 1389);
 });
 
 test("업비트/빗썸2.0 호가창에서 최우선 호가를 고른다", () => {

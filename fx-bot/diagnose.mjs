@@ -27,7 +27,7 @@ const TARGETS = [
     group: "환율",
     name: "네이버 stock api",
     url: "https://api.stock.naver.com/marketindex/exchange/FX_USDKRW",
-    pick: (j) => j?.calcPrice ?? j?.closePrice,
+    pick: (j) => j?.exchangeInfo?.closePrice,
   },
   {
     group: "환율",
@@ -95,7 +95,7 @@ const TARGETS = [
     group: "테더",
     name: "코빗 호가창",
     url: "https://api.korbit.co.kr/v2/orderbook?symbol=usdt_krw",
-    pick: (j) => j?.data?.asks?.[0]?.[0] ?? j?.asks?.[0]?.[0],
+    pick: (j) => j?.data?.asks?.[0]?.price,
   },
 ];
 

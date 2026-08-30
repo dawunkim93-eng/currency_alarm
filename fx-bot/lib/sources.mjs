@@ -13,14 +13,16 @@
 // 저장소 이름은 바뀔 수 있으니 UA 에 박지 않는다. 봇 이름과 계정만 밝힌다.
 const UA = "fx-alert-bot/1.0 (+https://github.com/dawunkim93-eng)";
 
-const FOREX_URL = "https://quotation-api-cdn.dunamu.com/v1/forex/recent?codes=FRX.KRWUSD";
-const FOREX_FALLBACK_URL =
-  "https://m.stock.naver.com/front-api/marketIndex/prices?category=exchange&reutersCode=FX_USDKRW&page=1&pageSize=1";
+const DUNAMU_URL = "https://quotation-api-cdn.dunamu.com/v1/forex/recent?codes=FRX.KRWUSD";
+const NAVER_URL = "https://api.stock.naver.com/marketindex/exchange/FX_USDKRW";
+const YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/KRW=X?interval=1m&range=1d";
+const ER_API_URL = "https://open.er-api.com/v6/latest/USD";
 const UPBIT_ORDERBOOK_URL = "https://api.upbit.com/v1/orderbook?markets=KRW-USDT";
 const UPBIT_TICKER_URL = "https://api.upbit.com/v1/ticker?markets=KRW-USDT";
 /** 빗썸은 2.0(업비트 호환)과 1.0이 함께 살아 있다. 2.0을 먼저 보고 실패하면 1.0으로 내려간다. */
 const BITHUMB_ORDERBOOK_V2_URL = "https://api.bithumb.com/v1/orderbook?markets=KRW-USDT";
 const BITHUMB_ORDERBOOK_V1_URL = "https://api.bithumb.com/public/orderbook/USDT_KRW";
+const COINONE_ORDERBOOK_URL = "https://api.coinone.co.kr/public/v2/orderbook/KRW/USDT";
 
 export async function fetchJson(url, { timeoutMs = 7000, retries = 2, fetchImpl = fetch } = {}) {
   let lastError;
@@ -66,11 +68,16 @@ export function parseDunamuForex(payload) {
   };
 }
 
-/** 네이버 금융 대체 경로. 매매기준율(종가)만 준다 — 전신환 스프레드는 설정값으로 메운다. */
-export function parseNaverForex(payload) {
-  const rows = payload?.result?.marketIndexPrices ?? payload?.marketIndexPrices ?? payload?.result ?? payload;
-  const row = Array.isArray(rows) ? rows[0] : rows;
-  const base = num(row?.closePrice);
+/**
+ * 네이버 금융의 하나은행 고시 (`exchangeInfo.closePrice` 가 매매기준율).
+ *
+ * 두나무 CDN 이 막힌 곳(GitHub Actions 러너가 그렇다)에서 **매매기준율을 그대로
+ * 주는 유일한 경로**라 1순위 대체다. 값은 "1,381.00" 처럼 쉼표가 붙어 온다.
+ * 전신환 고시는 주지 않으므로 스프레드는 설정값(기본 1%)으로 메운다.
+ */
+export function parseNaverExchange(payload) {
+  const info = payload?.exchangeInfo ?? payload;
+  const base = num(info?.closePrice);
   if (!base) throw new Error("네이버 응답에서 환율을 읽지 못했습니다.");
   return {
     base,
@@ -78,11 +85,54 @@ export function parseNaverForex(payload) {
     ttBuying: null,
     cashSelling: null,
     cashBuying: null,
-    changePct: num(row?.fluctuationsRatio) ?? null,
-    changePrice: num(row?.compareToPreviousClosePrice) ?? null,
-    provider: "네이버 금융",
-    quotedAt: null,
+    changePct: num(info?.fluctuationsRatio),
+    changePrice: num(info?.fluctuations),
+    provider: `${info?.stockExchangeType?.nameKor ?? "하나은행"} 고시`,
+    quotedAt: info?.localTradedAt ? Date.parse(info.localTradedAt) || null : null,
     source: "naver",
+  };
+}
+
+/**
+ * 야후 파이낸스 KRW=X — 은행 고시가 아니라 **시장 중간값**이다.
+ *
+ * 고시가 멈추는 주말·야간에도 움직이고 어디서든 열린다. 다만 은행이 실제로
+ * 적용하는 값과는 몇 원 차이가 나므로, 고시를 못 구했을 때만 쓴다.
+ */
+export function parseYahooChart(payload) {
+  const meta = payload?.chart?.result?.[0]?.meta;
+  const base = num(meta?.regularMarketPrice);
+  if (!base) throw new Error("야후 응답에서 환율을 읽지 못했습니다.");
+  const previous = num(meta?.chartPreviousClose ?? meta?.previousClose);
+  return {
+    base,
+    ttSelling: null,
+    ttBuying: null,
+    cashSelling: null,
+    cashBuying: null,
+    changePct: previous ? ((base - previous) / previous) * 100 : null,
+    changePrice: previous ? base - previous : null,
+    provider: "야후 시장중간값",
+    quotedAt: num(meta?.regularMarketTime) ? num(meta.regularMarketTime) * 1000 : null,
+    source: "yahoo",
+  };
+}
+
+/** 최후의 보루. 하루 한 번 갱신이라 장중 판단에는 못 쓰지만 "값이 아예 없음"보다는 낫다. */
+export function parseErApi(payload) {
+  const base = num(payload?.rates?.KRW);
+  if (!base) throw new Error("er-api 응답에서 환율을 읽지 못했습니다.");
+  return {
+    base,
+    ttSelling: null,
+    ttBuying: null,
+    cashSelling: null,
+    cashBuying: null,
+    changePct: null,
+    changePrice: null,
+    provider: "open.er-api (일일)",
+    quotedAt: num(payload?.time_last_update_unix) ? num(payload.time_last_update_unix) * 1000 : null,
+    source: "er-api",
   };
 }
 
@@ -124,16 +174,36 @@ function num(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+/**
+ * 매매기준율 출처 — **위에서부터 되는 것**을 쓴다.
+ *
+ * 순서는 취향이 아니라 측정 결과다 (`node fx-bot/diagnose.mjs`).
+ * GitHub Actions 러너에서는 두나무가 100ms 대에 `fetch failed` 로 끊긴다
+ * (해외 IP 차단). 반면 국내에서 돌리면 두나무가 전신환 고시까지 줘서 제일 좋다.
+ * 그래서 둘 다 남겨두고 순서로 해결한다.
+ *
+ * 아래로 갈수록 "은행이 실제로 적용하는 값"에서 멀어진다. 야후·er-api 는
+ * 시장 중간값이라 몇 원 어긋나므로, 알림에 출처를 항상 같이 찍는다.
+ */
+const FOREX_SOURCES = [
+  { name: "두나무(하나은행 고시)", url: DUNAMU_URL, parse: parseDunamuForex },
+  { name: "네이버(하나은행 고시)", url: NAVER_URL, parse: parseNaverExchange },
+  { name: "야후(시장중간값)", url: YAHOO_URL, parse: parseYahooChart },
+  { name: "open.er-api(일일)", url: ER_API_URL, parse: parseErApi },
+];
+
 export async function fetchForex(options = {}) {
-  try {
-    return parseDunamuForex(await fetchJson(FOREX_URL, options));
-  } catch (primaryError) {
+  const failures = [];
+  for (const source of FOREX_SOURCES) {
     try {
-      return parseNaverForex(await fetchJson(FOREX_FALLBACK_URL, options));
-    } catch (fallbackError) {
-      throw new Error(`매매기준율 수집 실패 (두나무: ${primaryError.message} / 네이버: ${fallbackError.message})`);
+      // 뒤에 대안이 있으니 재시도로 시간을 끌지 않는다. 막힌 곳은 대개
+      // 100ms 안에 끊기고, 살아 있는 곳으로 빨리 넘어가는 편이 낫다.
+      return source.parse(await fetchJson(source.url, { retries: 0, ...options }));
+    } catch (error) {
+      failures.push(`${source.name}: ${error.message}`);
     }
   }
+  throw new Error(`매매기준율 수집 실패 — ${failures.join(" / ")}`);
 }
 
 export async function fetchUpbit(options = {}) {
@@ -152,6 +222,18 @@ export async function fetchBithumb(options = {}) {
   }
 }
 
+/** 코인원 호가창. asks/bids 는 {price, qty} 문자열 배열이다. */
+export function parseCoinoneOrderbook(payload) {
+  const ask = num(payload?.asks?.[0]?.price);
+  const bid = num(payload?.bids?.[0]?.price);
+  if (!ask || !bid) throw new Error("코인원 호가창에서 ask/bid 를 읽지 못했습니다.");
+  return { ask, bid, at: num(payload?.timestamp) || null };
+}
+
+export async function fetchCoinone(options = {}) {
+  return parseCoinoneOrderbook(await fetchJson(COINONE_ORDERBOOK_URL, options));
+}
+
 /**
  * 한 번의 시세 스냅샷.
  *
@@ -160,14 +242,12 @@ export async function fetchBithumb(options = {}) {
  */
 export async function fetchMarket({ config, options = {} } = {}) {
   const enabled = Object.entries(config?.exchanges ?? {}).filter(([, ex]) => ex.enabled !== false);
-  const fetchers = { upbit: fetchUpbit, bithumb: fetchBithumb };
+  const fetchers = { upbit: fetchUpbit, bithumb: fetchBithumb, coinone: fetchCoinone };
 
   const [forexResult, ...exchangeResults] = await Promise.allSettled([
     fetchForex(options),
     ...enabled.map(([id]) => (fetchers[id] ? fetchers[id](options) : Promise.reject(new Error(`모르는 거래소: ${id}`)))),
   ]);
-
-  if (forexResult.status !== "fulfilled") throw forexResult.reason;
 
   const exchanges = {};
   const errors = [];
@@ -176,6 +256,15 @@ export async function fetchMarket({ config, options = {} } = {}) {
     if (result.status === "fulfilled") exchanges[id] = result.value;
     else errors.push(`${config.exchanges[id].label ?? id}: ${result.reason?.message ?? result.reason}`);
   });
+
+  // 환율을 못 받으면 어차피 계산이 안 되지만, 거래소 쪽 결과도 함께 알려준다.
+  // "환율만 막힌 것"과 "네트워크가 통째로 막힌 것"은 원인이 전혀 다르다.
+  if (forexResult.status !== "fulfilled") {
+    const exchangeNote = errors.length
+      ? ` (거래소도 실패 — ${errors.join(" / ")})`
+      : ` (거래소는 정상: ${Object.keys(exchanges).join(", ") || "없음"})`;
+    throw new Error(`${forexResult.reason?.message ?? forexResult.reason}${exchangeNote}`);
+  }
 
   return { forex: forexResult.value, exchanges, errors, at: Date.now() };
 }
