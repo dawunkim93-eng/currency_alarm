@@ -8,7 +8,7 @@
 
 [Unit]
 Description=환율·테더 차익 알림 텔레그램 봇
-Documentation=https://github.com/dawunkim93-eng/babybenefit/blob/main/fx-bot/README.md
+# 문서는 저장소 안 fx-bot/README.md. URL 을 박아두면 저장소 이름을 바꿀 때 썩는다.
 # 부팅 직후엔 DNS 가 아직 안 서 있는 경우가 있다. 네트워크가 "설정 완료"될 때까지 기다린다.
 After=network-online.target
 Wants=network-online.target

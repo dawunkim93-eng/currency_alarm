@@ -10,7 +10,8 @@
  *   - 테더 호가: 업비트 / 빗썸 공개 호가창 (인증 불필요).
  */
 
-const UA = "babybenefit-fx-bot/1.0 (+https://github.com/dawunkim93-eng/babybenefit)";
+// 저장소 이름은 바뀔 수 있으니 UA 에 박지 않는다. 봇 이름과 계정만 밝힌다.
+const UA = "fx-alert-bot/1.0 (+https://github.com/dawunkim93-eng)";
 
 const FOREX_URL = "https://quotation-api-cdn.dunamu.com/v1/forex/recent?codes=FRX.KRWUSD";
 const FOREX_FALLBACK_URL =
