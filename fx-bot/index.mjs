@@ -223,7 +223,15 @@ async function main() {
         // 409 는 같은 토큰으로 두 곳에서 롱폴링할 때 난다. 상주 실행 중에
         // GitHub Actions 나 다른 터미널에서 또 켠 경우가 대부분이다.
         if (/conflict/i.test(error.message)) {
-          console.error("[fx-bot] 같은 봇 토큰으로 다른 곳에서도 돌고 있습니다. 하나만 남기세요.");
+          // 409 는 두 가지 원인이 있는데 대처가 서로 다르다. 텔레그램이 준
+          // 설명을 그대로 보여줘야 어느 쪽인지 바로 안다.
+          //   1) 같은 토큰으로 두 곳에서 롱폴링 중 → 하나만 남긴다
+          //   2) 그 토큰에 웹훅이 걸려 있음 → deleteWebhook 으로 지운다
+          console.error(`[fx-bot] ${error.message}`);
+          console.error(
+            "[fx-bot] 같은 봇 토큰을 다른 봇·다른 실행이 쓰고 있습니다. 하나만 남기거나,\n" +
+              '         웹훅이 걸려 있으면 curl -s "https://api.telegram.org/bot<토큰>/deleteWebhook" 로 지우세요.',
+          );
           return sleep(15_000);
         }
         console.error(`[fx-bot] 명령 수신 실패: ${error.message}`);
