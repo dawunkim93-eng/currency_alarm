@@ -52,11 +52,11 @@ export const DEFAULTS = {
 
   thresholds: {
     /** 달러 → 테더 갈아타기 이득률(%). 은행 달러 매도 대금으로 테더를 살 때 남는 폭. */
-    toTetherPct: 0.3,
+    toTetherPct: 0.5,
     /** 테더 → 달러 갈아타기 이득률(%). */
-    toDollarPct: 0.3,
+    toDollarPct: 0.5,
     /** 두 다리를 동시에 다 먹을 수 있을 때(즉시 왕복 차익, %). 거의 안 뜨지만 뜨면 큰 신호. */
-    roundTripPct: 0.6,
+    roundTripPct: 1.0,
     /** 은행 간 즉시 차익(%) — 최저가 매수처와 최고가 매도처의 벌어짐. */
     bankGapPct: 0.2,
     /** 거래소 간 테더 가격차(%). */

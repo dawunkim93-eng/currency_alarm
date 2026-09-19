@@ -45,9 +45,9 @@
     }
   },
   "thresholds": {
-    "toTetherPct": 0.3,
-    "toDollarPct": 0.3,
-    "roundTripPct": 0.6,
+    "toTetherPct": 0.5,
+    "toDollarPct": 0.5,
+    "roundTripPct": 1.0,
     "bankGapPct": 0.2,
     "exchangeGapPct": 0.3,
     "movePct": 0.4,

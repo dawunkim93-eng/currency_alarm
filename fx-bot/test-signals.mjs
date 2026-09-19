@@ -284,9 +284,9 @@ function evaluateWith({ market, config = baseConfig(), history = [], now = 2_000
 }
 
 test("역프(테더가 쌀 때) — 달러→테더만 발동한다", () => {
-  const signals = evaluateWith({ market: marketOf({ ask: 1383.0, bid: 1382.9 }) });
-  // 1390.5 / (1383.0 × 1.0005) − 1 = +0.4922%
-  assert.ok(Math.abs(signals.to_tether.value - 0.4922) < 0.001, `${signals.to_tether.value}`);
+  const signals = evaluateWith({ market: marketOf({ ask: 1382.0, bid: 1381.9 }) });
+  // 1390.5 / (1382.0 × 1.0005) − 1 = +0.5648%
+  assert.ok(Math.abs(signals.to_tether.value - 0.5648) < 0.001, `${signals.to_tether.value}`);
   assert.equal(signals.to_tether.fired, true);
   assert.equal(signals.to_dollar.fired, false);
   assert.equal(signals.round_trip.fired, false);
@@ -307,11 +307,11 @@ test("가격이 붙어 있으면 아무것도 발동하지 않는다", () => {
   assert.ok(signals.to_tether.value < 0 && signals.to_dollar.value < 0, "수수료·스프레드 때문에 둘 다 음수여야 한다");
 });
 
-test("임계값 언저리 — 0.29% 는 안 울리고 0.31% 는 울린다", () => {
+test("임계값 언저리 — 0.49% 는 안 울리고 0.51% 는 울린다", () => {
   // 목표 수익률 r 을 만드는 ask: bankSell / (ask × (1+fee)) − 1 = r
   const askFor = (r) => 1390.5 / (1 + r / 100) / 1.0005;
-  const below = evaluateWith({ market: marketOf({ ask: askFor(0.29), bid: 1382 }) });
-  const above = evaluateWith({ market: marketOf({ ask: askFor(0.31), bid: 1382 }) });
+  const below = evaluateWith({ market: marketOf({ ask: askFor(0.49), bid: 1382 }) });
+  const above = evaluateWith({ market: marketOf({ ask: askFor(0.51), bid: 1382 }) });
   assert.equal(below.to_tether.fired, false, `아래쪽 ${below.to_tether.value}`);
   assert.equal(above.to_tether.fired, true, `위쪽 ${above.to_tether.value}`);
 });
@@ -465,7 +465,7 @@ test("점 경로로 설정을 읽고 쓴다", () => {
 test("텔레그램에서 바꾼 값이 설정 파일 위에 얹힌다", () => {
   const merged = applyOverrides(baseConfig(), { overrides: { thresholds: { toTetherPct: 0.15 } } });
   assert.equal(merged.thresholds.toTetherPct, 0.15);
-  assert.equal(merged.thresholds.toDollarPct, 0.3, "건드리지 않은 값은 그대로여야 한다");
+  assert.equal(merged.thresholds.toDollarPct, 0.5, "건드리지 않은 값은 그대로여야 한다");
 });
 
 // ── 6. 설정 검증 ──────────────────────────────────────────────────────

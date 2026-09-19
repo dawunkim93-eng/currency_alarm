@@ -189,7 +189,7 @@ export function evaluate({ market, quotes, config, history = [], now = Date.now(
  *   2) 쿨다운이 지났으면 다시 보낸다
  *   3) 쿨다운 중이라도 직전 알림보다 `escalationPct`(%p) 더 좋아졌으면 보낸다
  *
- * 3번이 없으면 0.3%에서 알림 한 번 받고 0.9%까지 벌어지는 걸 놓친다.
+ * 3번이 없으면 0.5%에서 알림 한 번 받고 1.1%까지 벌어지는 걸 놓친다.
  */
 export function selectAlerts({ signals, state, config, now = Date.now() }) {
   const cooldownMs = config.alerts.cooldownMinutes * 60_000;
