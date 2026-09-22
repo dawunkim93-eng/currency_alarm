@@ -27,6 +27,28 @@ const SETTABLE = new Set([
 
 const SIDES = { 매수: "buy", 살때: "buy", buy: "buy", 매도: "sell", 팔때: "sell", sell: "sell" };
 
+/**
+ * "/" 자동완성 메뉴(setMyCommands)에 등록할 명령.
+ *
+ * 텔레그램은 command 이름에 a-z0-9_ 만 허용해서 **한글 명령은 메뉴에 못 올린다**.
+ * 그래서 영문 별칭을 등록하고 설명을 한국어로 단다. 한글 명령(/시세 등)은
+ * 여전히 입력하면 그대로 동작한다 — 등록만 못 할 뿐이다.
+ * 개수는 100개, 이름은 1~32자, 설명은 1~256자가 텔레그램 규칙이다.
+ */
+export const MENU_COMMANDS = [
+  { command: "rate", description: "현재 시세 (은행·거래소·엔/JPYC)" },
+  { command: "signals", description: "트리거 현황과 남은 폭" },
+  { command: "config", description: "설정 보기 (임계값·우대율)" },
+  { command: "threshold", description: "임계값 변경 — /threshold toTetherPct 0.5" },
+  { command: "set", description: "설정 변경 — /set alerts.escalationPct 0.5" },
+  { command: "limit", description: "지정가 알림 — /limit 매수 1380" },
+  { command: "quote", description: "실측 환율 입력 — /quote 토스 매도 1391.2" },
+  { command: "pref", description: "우대율 조정 — /pref 스위치원 매수 90" },
+  { command: "mute", description: "N분간 알림 멈춤 — /mute 60" },
+  { command: "unmute", description: "음소거 해제" },
+  { command: "help", description: "도움말 (한글: /시세 /신호 /임계 …)" },
+];
+
 /** "1,391.2" → 1391.2 · "0.25%" → 0.25 · "90%" → 90 (우대율 변환은 호출부에서) */
 export function parseNumber(raw) {
   if (raw == null) return null;

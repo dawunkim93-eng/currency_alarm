@@ -22,7 +22,7 @@ import { buildQuotes } from "./lib/venues.mjs";
 import { evaluate, selectAlerts } from "./lib/signals.mjs";
 import { applyOverrides, loadState, pushHistory, saveState } from "./lib/state.mjs";
 import { createBot, isAllowedChat, parseCommand } from "./lib/telegram.mjs";
-import { handleCommand } from "./lib/commands.mjs";
+import { handleCommand, MENU_COMMANDS } from "./lib/commands.mjs";
 import { formatAlert, formatDigest, formatRates, formatRecovered, isQuietHour, kstTime } from "./lib/format.mjs";
 
 const argv = process.argv.slice(2);
@@ -166,6 +166,14 @@ async function drainCommands(waitSeconds) {
 
 async function main() {
   console.log(`[fx-bot] 시작 · 설정 ${config.configPath} · 상태 ${config.statePath}`);
+
+  // "/" 자동완성 메뉴 등록 — 매 시작마다 덮어써도 무해하다. 실패해도(순간 통신
+  // 문제) 봇 본연의 일을 막을 이유가 없으니 로그만 남기고 계속 간다.
+  if (!DRY_RUN && config.token) {
+    await bot.setMyCommands(MENU_COMMANDS).catch((error) => {
+      console.error(`[fx-bot] 명령 메뉴 등록 실패 (무시하고 계속): ${error.message}`);
+    });
+  }
 
   if (ONCE) {
     await safeTick();

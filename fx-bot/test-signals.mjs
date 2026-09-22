@@ -26,7 +26,7 @@ import {
 import { buildQuotes, derivedSpreads } from "./lib/venues.mjs";
 import { evaluate, findAnchor, selectAlerts } from "./lib/signals.mjs";
 import { EMPTY_STATE, applyOverrides, getPath, pushHistory, setPath } from "./lib/state.mjs";
-import { handleCommand } from "./lib/commands.mjs";
+import { MENU_COMMANDS, handleCommand } from "./lib/commands.mjs";
 import { parseCommand, isAllowedChat } from "./lib/telegram.mjs";
 import {
   compactWon,
@@ -802,6 +802,40 @@ asyncTest("/시세 는 시세를 받아 표를 만든다", async () => {
 
 asyncTest("모르는 명령에는 안내를 준다", async () => {
   assert.match((await run("/없는명령")).reply, /모르는 명령/);
+});
+
+// ── 9. "/" 자동완성 메뉴 ──────────────────────────────────────────────
+test("메뉴 명령은 텔레그램 규칙(a-z0-9_, 32자)을 지킨다", () => {
+  // setMyCommands 가 400 으로 거절되면 메뉴가 아예 안 뜨므로, 등록 전에
+  // 규칙을 여기서 걸러둔다. 개수 100, 이름 1~32자, 설명 1~256자.
+  assert.ok(MENU_COMMANDS.length > 0 && MENU_COMMANDS.length <= 100);
+  for (const { command, description } of MENU_COMMANDS) {
+    assert.match(command, /^[a-z0-9_]{1,32}$/, `command=${command}`);
+    assert.ok(description.length >= 1 && description.length <= 256, `description=${description}`);
+  }
+});
+
+asyncTest("메뉴에 등록한 명령은 전부 실제로 응답한다", async () => {
+  // 메뉴가 존재하지 않는 명령을 광고하면 안 된다. 영문 별칭이 깨지면
+  // (리팩터링에서 case 이름을 바꾸는 식) 이 테스트가 잡아준다.
+  const snapshot = async () => {
+    const now = 4_000_000_000;
+    const market = marketOf();
+    const config = baseConfig();
+    const quotes = buildQuotes({ market, config, now });
+    return { market, quotes, signals: evaluate({ market, quotes, config, now }) };
+  };
+  for (const { command } of MENU_COMMANDS) {
+    const result = await handleCommand({
+      command: { name: command, args: [] },
+      state: { ...EMPTY_STATE },
+      config: baseConfig(),
+      snapshot,
+      now: 1_000_000,
+    });
+    assert.doesNotMatch(result.reply ?? "", /모르는 명령/, `/${command} 은(는) 메뉴에만 있고 실제로는 없다`);
+    assert.ok(result.reply, `/${command} 은(는) 응답이 있어야 한다`);
+  }
 });
 
 // ── 실행 ──────────────────────────────────────────────────────────────

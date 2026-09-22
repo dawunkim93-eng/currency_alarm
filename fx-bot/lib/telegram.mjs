@@ -60,6 +60,15 @@ export function createBot({ token, chatIds, fetchImpl = fetch }) {
         { timeoutMs: (timeoutSeconds + 10) * 1000 },
       );
     },
+
+    /**
+     * "/" 자동완성 메뉴 등록. 채팅창에 "/" 를 치면 이 목록이 뜨고, 탭 한 번에
+     * 명령이 채워진다. 몇 번을 호출해도 같은 결과라(덮어쓰기) 매 시작마다
+     * 다시 등록해도 부담 없다.
+     */
+    async setMyCommands(commands) {
+      return call("setMyCommands", { commands });
+    },
   };
 }
 
