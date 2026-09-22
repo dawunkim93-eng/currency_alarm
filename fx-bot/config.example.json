@@ -48,12 +48,17 @@
     "toTetherPct": 0.5,
     "toDollarPct": 0.5,
     "roundTripPct": 1.0,
+    "toJpycPct": 0.5,
+    "toYenPct": 0.5,
     "bankGapPct": 0.2,
     "exchangeGapPct": 0.3,
     "movePct": 0.4,
     "moveWindowMinutes": 30,
     "usdBuyBelow": null,
     "usdSellAbove": null
+  },
+  "jpyc": {
+    "enabled": true
   },
   "alerts": {
     "cooldownMinutes": 30,

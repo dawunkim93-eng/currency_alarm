@@ -16,6 +16,7 @@ const SETTABLE = new Set([
   "notional",
   "pollSeconds",
   "manualQuoteTtlMinutes",
+  "jpyc.enabled",
   "digest.everyMinutes",
   "digest.quietHours.from",
   "digest.quietHours.to",

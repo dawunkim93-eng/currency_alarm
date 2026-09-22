@@ -50,6 +50,12 @@ export const DEFAULTS = {
     coinone: { label: "코인원", takerFee: 0.002, enabled: false },
   },
 
+  /** 엔화·JPYC 비교. JPYC 는 업비트에만 상장돼 있고 수수료도 업비트 값을 쓴다.
+   *  끄면 엔 고시·JPYC 호가 수집과 JPYC 신호 전체가 멈춘다(USD 알림은 그대로). */
+  jpyc: {
+    enabled: true,
+  },
+
   thresholds: {
     /** 달러 → 테더 갈아타기 이득률(%). 은행 달러 매도 대금으로 테더를 살 때 남는 폭. */
     toTetherPct: 0.5,
@@ -57,6 +63,10 @@ export const DEFAULTS = {
     toDollarPct: 0.5,
     /** 두 다리를 동시에 다 먹을 수 있을 때(즉시 왕복 차익, %). 거의 안 뜨지만 뜨면 큰 신호. */
     roundTripPct: 1.0,
+    /** 엔화 → JPYC 갈아타기 이득률(%). 은행 엔 매도 대금으로 JPYC 를 살 때 남는 폭. */
+    toJpycPct: 0.5,
+    /** JPYC → 엔화 갈아타기 이득률(%). */
+    toYenPct: 0.5,
     /** 은행 간 즉시 차익(%) — 최저가 매수처와 최고가 매도처의 벌어짐. */
     bankGapPct: 0.2,
     /** 거래소 간 테더 가격차(%). */

@@ -97,6 +97,44 @@ const TARGETS = [
     url: "https://api.korbit.co.kr/v2/orderbook?symbol=usdt_krw",
     pick: (j) => j?.data?.asks?.[0]?.price,
   },
+
+  // ── 엔화·JPYC (부수 파이프라인 — 여기가 다 막혀도 USD 알림은 계속 간다) ──
+  {
+    group: "엔화·JPYC",
+    name: "두나무 엔 고시",
+    url: "https://quotation-api-cdn.dunamu.com/v1/forex/recent?codes=FRX.KRWJPY",
+    pick: (j) => j?.[0]?.basePrice,
+  },
+  {
+    group: "엔화·JPYC",
+    name: "네이버 엔 고시",
+    url: "https://api.stock.naver.com/marketindex/exchange/FX_JPYKRW",
+    pick: (j) => j?.exchangeInfo?.closePrice,
+  },
+  {
+    group: "엔화·JPYC",
+    name: "야후 JPYKRW=X",
+    url: "https://query1.finance.yahoo.com/v8/finance/chart/JPYKRW=X?interval=1m&range=1d",
+    pick: (j) => j?.chart?.result?.[0]?.meta?.regularMarketPrice,
+  },
+  {
+    group: "엔화·JPYC",
+    name: "open.er-api 엔율",
+    url: "https://open.er-api.com/v6/latest/JPY",
+    pick: (j) => j?.rates?.KRW,
+  },
+  {
+    group: "엔화·JPYC",
+    name: "업비트 JPYC 호가창",
+    url: "https://api.upbit.com/v1/orderbook?markets=KRW-JPYC",
+    pick: (j) => j?.[0]?.orderbook_units?.[0]?.ask_price,
+  },
+  {
+    group: "엔화·JPYC",
+    name: "업비트 JPYC 체결가",
+    url: "https://api.upbit.com/v1/ticker?markets=KRW-JPYC",
+    pick: (j) => j?.[0]?.trade_price,
+  },
 ];
 
 async function probe(target) {
@@ -143,9 +181,17 @@ for (const result of results) {
 }
 
 const usable = (group) => results.filter((r) => r.group === group && r.ok).length;
-console.log(`\n환율 ${usable("환율")}/${results.filter((r) => r.group === "환율").length} · 테더 ${usable("테더")}/${results.filter((r) => r.group === "테더").length} 사용 가능`);
+const jpycGroup = "엔화·JPYC";
+console.log(
+  `\n환율 ${usable("환율")}/${results.filter((r) => r.group === "환율").length} · 테더 ${usable("테더")}/${results.filter((r) => r.group === "테더").length} 사용 가능`,
+);
+console.log(
+  `엔화·JPYC ${usable(jpycGroup)}/${results.filter((r) => r.group === jpycGroup).length} 사용 가능` +
+    (usable(jpycGroup) ? "" : " — JPYC 비교 신호는 나오지 않는다(USD 알림은 그대로)"),
+);
 
 // 환율과 테더 **양쪽 다** 하나씩은 열려야 봇이 의미가 있다.
+// 엔화·JPYC 는 부수 기능이라 없어도 막지 않는다.
 if (!usable("환율") || !usable("테더")) {
   console.error("\n이 환경에서는 봇을 돌릴 수 없습니다. 열린 출처가 한쪽이라도 없습니다.");
   process.exit(1);

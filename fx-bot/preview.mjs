@@ -25,13 +25,23 @@ const forex = {
   source: "dunamu",
 };
 
-/** 역프 상황: 업비트 테더가 은행 달러보다 싸다. */
+/** 역프 상황: 업비트 테더가 은행 달러보다 싸다. JPYC 도 엔보다 싸다(엔 역프). */
 const market = {
   forex,
   exchanges: {
     upbit: { ask: 1383.0, bid: 1382.9 },
     bithumb: { ask: 1383.4, bid: 1382.5 },
   },
+  jpy: {
+    base: 8.637,
+    ttSelling: 8.77,
+    ttBuying: 8.504,
+    changePct: -1.14,
+    changePrice: -0.0998,
+    provider: "하나은행",
+    source: "dunamu",
+  },
+  jpyc: { ask: 8.55, bid: 8.54, at: now },
   errors: [],
   at: now,
 };

@@ -101,9 +101,15 @@ export function marketFooter(market, quotes) {
   const lines = [
     `매매기준율 <b>${won(forex.base)}</b>${change} · ${escapeHtml(forex.provider)}`,
     quotes.exchanges.map((ex) => `${escapeHtml(ex.label)} ${won(ex.bid, 1)}/${won(ex.ask, 1)}`).join(" · "),
-    kstTime(market.at),
-  ].filter(Boolean);
-  if (market.errors?.length) lines.splice(2, 0, `⚠️ ${escapeHtml(market.errors.join(" / "))}`);
+  ];
+  if (market.jpy) {
+    const yen = market.jpy;
+    const jpyc = market.jpyc;
+    const detail = jpyc ? `업비트 JPYC ${won(jpyc.bid, 2)}/${won(jpyc.ask, 2)}` : escapeHtml(yen.provider);
+    lines.push(`엔 고시 <b>${won(yen.base, 2)}</b> · ${detail}`);
+  }
+  if (market.errors?.length) lines.push(`⚠️ ${escapeHtml(market.errors.join(" / "))}`);
+  lines.push(kstTime(market.at));
   return lines.join("\n");
 }
 
@@ -168,12 +174,29 @@ export function formatRates({ market, quotes, config, signals }) {
     .filter((signal) => signal.kind === "arb")
     .map((signal) => `${signal.emoji} ${escapeHtml(signal.title)} <b>${signedPct(signal.value)}</b>`);
 
+  // 엔화·JPYC 블록 — 데이터가 살아 있을 때만 나온다.
+  const yen = quotes.yen;
+  const yenRows = [];
+  if (yen) {
+    if (yen.bestBankBuy && yen.bestBankSell) {
+      yenRows.push(
+        `${escapeHtml(yen.bestBankBuy.label)} 엔 매수 ${won(yen.bestBankBuy.buy, 2)} / ${escapeHtml(yen.bestBankSell.label)} 엔 매도 ${won(yen.bestBankSell.sell, 2)} <i>(모형)</i>`,
+      );
+    }
+    if (yen.jpyc) {
+      yenRows.push(
+        `업비트 JPYC 매수 ${won(yen.jpyc.buyCost, 4)} / 매도 ${won(yen.jpyc.sellProceeds, 4)} <i>(수수료 ${(yen.jpyc.fee * 100).toFixed(3)}%)</i>`,
+      );
+    }
+  }
+
   return [
     "💱 <b>현재 시세</b>",
     bankTable(quotes),
     "",
     "<b>거래소 테더 (수수료 반영)</b>",
     ...exchangeRows,
+    ...(yenRows.length ? ["", "<b>엔화·JPYC (수수료 반영)</b>", ...yenRows] : []),
     "",
     arbRows.join("\n"),
     RULE,

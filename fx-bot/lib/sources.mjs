@@ -1,5 +1,5 @@
 /**
- * 시세 수집 — 매매기준율(USD/KRW)과 거래소 테더 호가
+ * 시세 수집 — 매매기준율(USD/KRW), 거래소 테더 호가, 엔화 고시와 JPYC 호가
  *
  * 네트워크 호출부와 **파싱부를 분리**했다. 파싱 함수(parse*)는 순수 함수라
  * `npm run test-fx` 에서 실제 응답 모양 그대로 검증한다. 시세를 잘못 읽으면
@@ -8,6 +8,11 @@
  * 출처
  *   - 매매기준율: 두나무 CDN (하나은행 고시). 실패하면 네이버 금융으로 대체.
  *   - 테더 호가: 업비트 / 빗썸 공개 호가창 (인증 불필요).
+ *   - 엔화 고시: 같은 체인의 JPY 버전. **단위가 제멋대로다** — 두나무·네이버는
+ *     100엔 단위, 야후·er-api 는 1엔 단위로 준다. perYen 으로 1엔당 원화로
+ *     못박는다. 100배 차이는 스프레드보다 훨씬 크기 때문에 단위를 틀리면
+ *     JPYC 신호가 전부 허깨비가 된다.
+ *   - JPYC 호가: 업비트 KRW-JPYC (빗썸·코인원은 미상장).
  */
 
 // 저장소 이름은 바뀔 수 있으니 UA 에 박지 않는다. 봇 이름과 계정만 밝힌다.
@@ -23,6 +28,14 @@ const UPBIT_TICKER_URL = "https://api.upbit.com/v1/ticker?markets=KRW-USDT";
 const BITHUMB_ORDERBOOK_V2_URL = "https://api.bithumb.com/v1/orderbook?markets=KRW-USDT";
 const BITHUMB_ORDERBOOK_V1_URL = "https://api.bithumb.com/public/orderbook/USDT_KRW";
 const COINONE_ORDERBOOK_URL = "https://api.coinone.co.kr/public/v2/orderbook/KRW/USDT";
+
+// 엔화·JPYC — USD 파이프라인과 독립인 부수 출처다. 하나가 죽어도 나머지는 계속 간다.
+const DUNAMU_JPY_URL = "https://quotation-api-cdn.dunamu.com/v1/forex/recent?codes=FRX.KRWJPY";
+const NAVER_JPY_URL = "https://api.stock.naver.com/marketindex/exchange/FX_JPYKRW";
+const YAHOO_JPY_URL = "https://query1.finance.yahoo.com/v8/finance/chart/JPYKRW=X?interval=1m&range=1d";
+const ER_API_JPY_URL = "https://open.er-api.com/v6/latest/JPY";
+const UPBIT_JPYC_ORDERBOOK_URL = "https://api.upbit.com/v1/orderbook?markets=KRW-JPYC";
+const UPBIT_JPYC_TICKER_URL = "https://api.upbit.com/v1/ticker?markets=KRW-JPYC";
 
 export async function fetchJson(url, { timeoutMs = 7000, retries = 2, fetchImpl = fetch } = {}) {
   let lastError;
@@ -206,6 +219,46 @@ export async function fetchForex(options = {}) {
   throw new Error(`매매기준율 수집 실패 — ${failures.join(" / ")}`);
 }
 
+/**
+ * 100엔 단위 고시를 **1엔당 원화**로 정규화한다.
+ *
+ * 한국 은행은 엔화를 100엔당으로 고시한다(863.70 = 100엔당 원화). 두나무·네이버도
+ * 이 모양을 그대로 준다. 반면 야후·er-api 는 처음부터 1엔 단위라 그대로 쓴다.
+ * 비율(changePct)은 단위와 무관하니 건드리지 않는다.
+ */
+export function perYen(quote) {
+  const out = { ...quote };
+  for (const key of ["base", "ttSelling", "ttBuying", "cashSelling", "cashBuying", "changePrice"]) {
+    if (out[key] != null) out[key] = out[key] / 100;
+  }
+  return out;
+}
+
+/**
+ * 엔화 고시 출처 — USD 체인과 같은 파서를 재사용하고, 100엔 단위인 곳만
+ * perYen 을 붙인다. 야후·er-api 는 처음부터 1엔 단위라 정규화가 필요 없다
+ * (er-api 는 latest/JPY 로 물으면 rates.KRW 가 곧 1엔당 원화다).
+ */
+const JPY_FOREX_SOURCES = [
+  { name: "두나무(하나은행 고시, 100엔)", url: DUNAMU_JPY_URL, parse: parseDunamuForex, per100: true },
+  { name: "네이버(하나은행 고시, 100엔)", url: NAVER_JPY_URL, parse: parseNaverExchange, per100: true },
+  { name: "야후(시장중간값)", url: YAHOO_JPY_URL, parse: parseYahooChart },
+  { name: "open.er-api(일일)", url: ER_API_JPY_URL, parse: parseErApi },
+];
+
+export async function fetchJpyForex(options = {}) {
+  const failures = [];
+  for (const source of JPY_FOREX_SOURCES) {
+    try {
+      const quote = source.parse(await fetchJson(source.url, { retries: 0, ...options }));
+      return source.per100 ? perYen(quote) : quote;
+    } catch (error) {
+      failures.push(`${source.name}: ${error.message}`);
+    }
+  }
+  throw new Error(`엔 고시 수집 실패 — ${failures.join(" / ")}`);
+}
+
 export async function fetchUpbit(options = {}) {
   try {
     return parseUpbitStyleOrderbook(await fetchJson(UPBIT_ORDERBOOK_URL, options));
@@ -234,18 +287,34 @@ export async function fetchCoinone(options = {}) {
   return parseCoinoneOrderbook(await fetchJson(COINONE_ORDERBOOK_URL, options));
 }
 
+/** 업비트 KRW-JPYC 호가창. 응답 모양이 KRW-USDT 와 같아 파서를 그대로 재사용한다. */
+export async function fetchUpbitJpyc(options = {}) {
+  try {
+    return parseUpbitStyleOrderbook(await fetchJson(UPBIT_JPYC_ORDERBOOK_URL, options));
+  } catch {
+    return parseUpbitTicker(await fetchJson(UPBIT_JPYC_TICKER_URL, options));
+  }
+}
+
 /**
  * 한 번의 시세 스냅샷.
  *
  * 거래소 하나가 죽어도 나머지로 계속 간다 — 업비트만 살아 있어도 역프 판단은
  * 가능하다. 반면 **매매기준율이 없으면 전부 무의미**하므로 그때만 던진다.
+ *
+ * 엔화·JPYC 는 부수 파이프라인이다. 수집에 실패해도 USD 알림은 그대로 가고,
+ * JPYC 신호만 조용히 사라진다 — 대신 errors 에 기록해 꼬리표에서 볼 수 있게
+ * 한다 ("엔 고시가 막혔다"를 모르면 신호가 안 오는 걸 기회 없음으로 오해한다).
  */
 export async function fetchMarket({ config, options = {} } = {}) {
   const enabled = Object.entries(config?.exchanges ?? {}).filter(([, ex]) => ex.enabled !== false);
   const fetchers = { upbit: fetchUpbit, bithumb: fetchBithumb, coinone: fetchCoinone };
+  const jpycOn = config?.jpyc?.enabled !== false;
 
-  const [forexResult, ...exchangeResults] = await Promise.allSettled([
+  const [forexResult, jpyResult, jpycResult, ...exchangeResults] = await Promise.allSettled([
     fetchForex(options),
+    jpycOn ? fetchJpyForex(options) : Promise.resolve(null),
+    jpycOn ? fetchUpbitJpyc(options) : Promise.resolve(null),
     ...enabled.map(([id]) => (fetchers[id] ? fetchers[id](options) : Promise.reject(new Error(`모르는 거래소: ${id}`)))),
   ]);
 
@@ -257,6 +326,13 @@ export async function fetchMarket({ config, options = {} } = {}) {
     else errors.push(`${config.exchanges[id].label ?? id}: ${result.reason?.message ?? result.reason}`);
   });
 
+  const jpy = jpyResult.status === "fulfilled" ? jpyResult.value : null;
+  const jpyc = jpycResult.status === "fulfilled" ? jpycResult.value : null;
+  if (jpycOn) {
+    if (!jpy) errors.push(`엔 고시: ${jpyResult.reason?.message ?? jpyResult.reason}`);
+    if (!jpyc) errors.push(`JPYC 호가: ${jpycResult.reason?.message ?? jpycResult.reason}`);
+  }
+
   // 환율을 못 받으면 어차피 계산이 안 되지만, 거래소 쪽 결과도 함께 알려준다.
   // "환율만 막힌 것"과 "네트워크가 통째로 막힌 것"은 원인이 전혀 다르다.
   if (forexResult.status !== "fulfilled") {
@@ -266,5 +342,5 @@ export async function fetchMarket({ config, options = {} } = {}) {
     throw new Error(`${forexResult.reason?.message ?? forexResult.reason}${exchangeNote}`);
   }
 
-  return { forex: forexResult.value, exchanges, errors, at: Date.now() };
+  return { forex: forexResult.value, exchanges, jpy, jpyc, errors, at: Date.now() };
 }

@@ -11,9 +11,13 @@
  * 수익률 정의 (수수료·스프레드를 다 녹인 뒤)
  *   달러→테더 : 은행에 달러 1을 판 원화로 테더를 몇 개 사나 − 1
  *   테더→달러 : 테더 1개를 판 원화로 달러를 몇 개 사나 − 1
+ *   엔→JPYC   : 은행에 엔 1을 판 원화로 JPYC 를 몇 개 사나 − 1
+ *   JPYC→엔   : JPYC 1개를 판 원화로 엔을 몇 개 사나 − 1
  *
  * 두 값의 부호가 곧 김프/역프다. 테더가 달러보다 싸면(역프) 앞이 +,
  * 테더가 비싸면(김프) 뒤가 +. 둘 다 +면 즉시 왕복 차익이라 크게 알린다.
+ * JPYC 는 원화를 경유해 갈아타므로 왕복이 성립하긴 하지만, 온체인 출금
+ * 수수료·절차가 별도로 붙어 즉시 왕복 신호는 만들지 않는다.
  */
 
 /** 창(window) 안에서 가장 오래된 기록을 찾는다. 없으면 null — 봇을 막 켠 직후가 그렇다. */
@@ -26,7 +30,7 @@ export function findAnchor(history, now, windowMinutes) {
 export function evaluate({ market, quotes, config, history = [], now = Date.now() }) {
   const t = config.thresholds;
   const signals = [];
-  const { bestBankBuy, bestBankSell, bestExchangeBuy, bestExchangeSell } = quotes;
+  const { bestBankBuy, bestBankSell, bestExchangeBuy, bestExchangeSell, yen } = quotes;
   const base = market.forex.base;
 
   const toTether =
@@ -86,6 +90,47 @@ export function evaluate({ market, quotes, config, history = [], now = Date.now(
         { label: "테더→달러", value: toDollar, unit: "%" },
       ],
       note: "설정한 우대율이 실제와 맞는지 먼저 확인하세요.",
+    });
+  }
+
+  // ── 엔화·JPYC — 미러 구조. JPYC 1개는 1엔이니 단위가 그대로 맞물린다.
+  // 업비트 단독 상장이라 거래소 간 비교는 없고, 왕복 신호도 만들지 않는다
+  // (온체인 출금 수수료·절차가 별도라 "즉시"가 아니다).
+  if (yen?.bestBankSell && yen?.jpyc) {
+    const yenToJpyc = pct(yen.bestBankSell.sell / yen.jpyc.buyCost - 1);
+    signals.push({
+      id: "yen_to_jpyc",
+      kind: "arb",
+      emoji: "💴",
+      title: "엔화 → JPYC 갈아타기",
+      subtitle: yenToJpyc >= 0 ? "JPYC가 엔보다 싸다 (역프)" : "JPYC가 엔보다 비싸다",
+      value: yenToJpyc,
+      threshold: t.toJpycPct,
+      fired: yenToJpyc >= t.toJpycPct,
+      legs: [
+        { label: `${yen.bestBankSell.label} 엔 매도`, value: yen.bestBankSell.sell, unit: "원/엔" },
+        { label: `${yen.jpyc.label} JPYC 매수`, value: yen.jpyc.buyCost, unit: "원/JPYC", note: "수수료 포함" },
+      ],
+      note: "실현에는 온체인 출금 절차·수수료가 따로 붙는다.",
+    });
+  }
+
+  if (yen?.bestBankBuy && yen?.jpyc) {
+    const jpycToYen = pct(yen.jpyc.sellProceeds / yen.bestBankBuy.buy - 1);
+    signals.push({
+      id: "jpyc_to_yen",
+      kind: "arb",
+      emoji: "💴",
+      title: "JPYC → 엔화 갈아타기",
+      subtitle: jpycToYen >= 0 ? "JPYC가 엔보다 비싸다 (김프)" : "JPYC가 엔보다 싸다",
+      value: jpycToYen,
+      threshold: t.toYenPct,
+      fired: jpycToYen >= t.toYenPct,
+      legs: [
+        { label: `${yen.jpyc.label} JPYC 매도`, value: yen.jpyc.sellProceeds, unit: "원/JPYC", note: "수수료 차감" },
+        { label: `${yen.bestBankBuy.label} 엔 매수`, value: yen.bestBankBuy.buy, unit: "원/엔" },
+      ],
+      note: "실현에는 온체인 출금 절차·수수료가 따로 붙는다.",
     });
   }
 

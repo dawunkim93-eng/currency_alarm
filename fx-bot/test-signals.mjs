@@ -21,6 +21,7 @@ import {
   parseUpbitStyleOrderbook,
   parseUpbitTicker,
   parseYahooChart,
+  perYen,
 } from "./lib/sources.mjs";
 import { buildQuotes, derivedSpreads } from "./lib/venues.mjs";
 import { evaluate, findAnchor, selectAlerts } from "./lib/signals.mjs";
@@ -30,9 +31,11 @@ import { parseCommand, isAllowedChat } from "./lib/telegram.mjs";
 import {
   compactWon,
   formatAlert,
+  formatRates,
   formatRecovered,
   formatSignals,
   isQuietHour,
+  marketFooter,
   notionalLine,
 } from "./lib/format.mjs";
 
@@ -111,18 +114,94 @@ const BITHUMB_LEGACY = {
   },
 };
 
+/** 두나무 FRX.KRWJPY — 하나은행 엔 고시는 **100엔 단위**다 (863.7 = 100엔당 원화). */
+const DUNAMU_JPY = [
+  {
+    code: "FRX.KRWJPY",
+    currencyCode: "JPY",
+    currencyName: "엔",
+    country: "일본",
+    name: "일본 (JPY/KRW)",
+    date: "2026-09-22",
+    time: "23:59:59",
+    recurrenceCount: 710,
+    basePrice: 863.7,
+    openingPrice: 873.6,
+    highPrice: 875.5,
+    lowPrice: 862.0,
+    change: "FALL",
+    changePrice: -9.98,
+    signedChangePrice: -9.98,
+    changeRate: -0.0114,
+    signedChangeRate: -0.0114,
+    cashBuyingPrice: 877.0,
+    cashSellingPrice: 850.4,
+    ttBuyingPrice: 858.0,
+    ttSellingPrice: 869.4,
+    provider: "하나은행",
+    timestamp: 1790_000_000_000,
+  },
+];
+
+/** 네이버 FX_JPYKRW — 마찬가지로 100엔 단위. closePrice 는 "1,000" 같은 쉼표 문자열이 온다. */
+const NAVER_JPY = {
+  exchangeInfo: {
+    stockExchangeType: { code: "HANA", nameKor: "하나은행" },
+    reutersCode: "FX_JPYKRW",
+    name: "일본 JPY",
+    fullName: "일본 JPY 100",
+    localTradedAt: "2026-09-22T21:22:43+09:00",
+    closePrice: "863.70",
+    fluctuations: "-9.98",
+    fluctuationsRatio: "-1.14",
+    marketStatus: "OPEN",
+  },
+};
+
+const UPBIT_JPYC_ORDERBOOK = [
+  {
+    market: "KRW-JPYC",
+    timestamp: 1790_000_001_000,
+    total_ask_size: 4277633.5,
+    total_bid_size: 4214770.4,
+    orderbook_units: [
+      { ask_price: 8.55, bid_price: 8.54, ask_size: 183617.1, bid_size: 58591.3 },
+      { ask_price: 8.56, bid_price: 8.53, ask_size: 42025.4, bid_size: 125508.2 },
+    ],
+  },
+];
+
 const baseConfig = () => deepMerge(DEFAULTS, { token: "t", chatIds: ["1"] });
 
 /** 테스트용 시세 스냅샷. ask/bid 만 갈아끼우면 김프/역프 시나리오가 된다. */
-function marketOf({ ask = 1383.0, bid = 1382.9, bithumb = null, base = 1390.5 } = {}) {
+function marketOf({ ask = 1383.0, bid = 1382.9, bithumb = null, base = 1390.5, jpy = null, jpyc = null } = {}) {
   const exchanges = { upbit: { ask, bid, at: 1 } };
   if (bithumb) exchanges.bithumb = bithumb;
   return {
     forex: { ...parseDunamuForex(DUNAMU), base },
     exchanges,
+    jpy,
+    jpyc,
     errors: [],
     at: 1756_500_000_000,
   };
+}
+
+/** 엔화 시나리오용 시세. 엔 고시는 1엔당 원화(정규화 뒤), JPYC 는 업비트 호가. */
+function yenMarketOf({ jpyBase = 8.637, jpycAsk = 8.55, jpycBid = 8.54 } = {}) {
+  return marketOf({
+    jpy: {
+      base: jpyBase,
+      ttSelling: jpyBase * 1.0154,
+      ttBuying: jpyBase * 0.9846,
+      changePct: -1.14,
+      changePrice: -0.0998,
+      provider: "하나은행",
+      quotedAt: 1790_000_000_000,
+      source: "dunamu",
+    },
+    jpyc: { ask: jpycAsk, bid: jpycBid, at: 1 },
+  });
 }
 
 // ── 1. 시세 파싱 ──────────────────────────────────────────────────────
@@ -203,6 +282,43 @@ test("업비트/빗썸2.0 호가창에서 최우선 호가를 고른다", () => 
   assert.deepEqual(parseUpbitStyleOrderbook(UPBIT_ORDERBOOK), { ask: 1383.0, bid: 1382.9, at: 1756_500_001_000 });
 });
 
+// ── 엔화·JPYC 파싱 ────────────────────────────────────────────────────
+test("두나무 엔 고시(100엔)를 1엔 단위로 정규화한다", () => {
+  const yen = perYen(parseDunamuForex(DUNAMU_JPY));
+  // 100엔당 863.7원 → 1엔당 8.637원. 단위를 틀리면 신호가 전부 허깨비가 된다.
+  assert.ok(Math.abs(yen.base - 8.637) < 1e-9, `base=${yen.base}`);
+  assert.ok(Math.abs(yen.ttSelling - 8.694) < 1e-9, `ttSelling=${yen.ttSelling}`);
+  assert.ok(Math.abs(yen.ttBuying - 8.58) < 1e-9, `ttBuying=${yen.ttBuying}`);
+  // 100엔 기준 가격차 -9.98원도 1엔 기준 -0.0998원으로 맞춰진다.
+  assert.ok(Math.abs(yen.changePrice - -0.0998) < 1e-9, `changePrice=${yen.changePrice}`);
+  // 비율은 단위와 무관하니 그대로다.
+  assert.ok(Math.abs(yen.changePct - -1.14) < 1e-9, `changePct=${yen.changePct}`);
+});
+
+test("네이버 엔 고시도 100엔 단위로 온다", () => {
+  const yen = perYen(parseNaverExchange(NAVER_JPY));
+  assert.ok(Math.abs(yen.base - 8.637) < 1e-9, `base=${yen.base}`);
+  assert.match(yen.provider, /하나은행/);
+  assert.equal(yen.ttSelling, null); // 네이버는 전신환 고시가 없다
+});
+
+test("야후·er-api 엔율은 처음부터 1엔 단위라 정규화가 필요 없다", () => {
+  const yahoo = parseYahooChart({
+    chart: {
+      result: [{ meta: { regularMarketPrice: 8.614, chartPreviousClose: 8.721, regularMarketTime: 1790000000 } }],
+      error: null,
+    },
+  });
+  assert.ok(Math.abs(yahoo.base - 8.614) < 1e-9);
+
+  const erApi = parseErApi({ result: "success", rates: { KRW: 8.744293 }, time_last_update_unix: 1790000000 });
+  assert.ok(Math.abs(erApi.base - 8.744293) < 1e-9);
+});
+
+test("업비트 JPYC 호가창도 업비트 파서로 읽는다", () => {
+  assert.deepEqual(parseUpbitStyleOrderbook(UPBIT_JPYC_ORDERBOOK), { ask: 8.55, bid: 8.54, at: 1790_000_001_000 });
+});
+
 test("빗썸 1.0 호가창은 문자열 가격이고 asks[0]/bids[0] 가 최우선이다", () => {
   const book = parseBithumbLegacyOrderbook(BITHUMB_LEGACY);
   assert.equal(book.ask, 1383.4);
@@ -276,6 +392,31 @@ test("수동 입력 환율이 모형을 덮어쓰고, 유효시간이 지나면 
   assert.equal(staleSwitchen.manual, null);
 });
 
+test("엔 뱅크 모형은 엔 기준율에 같은 공식을 쓰고, JPYC 수수료를 녹인다", () => {
+  const quotes = buildQuotes({ market: yenMarketOf(), config: baseConfig() });
+  const yen = quotes.yen;
+  // 우대 100%(토스)는 엔 기준율 그대로, 하나(90%)는 스프레드의 10%만 불리하다.
+  const toss = yen.banks.find((bank) => bank.id === "toss");
+  const hana = yen.banks.find((bank) => bank.id === "hana");
+  assert.ok(Math.abs(toss.buy - 8.637) < 1e-9, `toss.buy=${toss.buy}`);
+  assert.ok(hana.buy > toss.buy, "우대가 낮은 곳이 더 비싸야 한다");
+  assert.equal(yen.bestBankBuy.id, "toss");
+  assert.equal(yen.bestBankSell.id, "toss");
+
+  // 업비트 테이커 수수료를 JPYC 값에도 녹인다.
+  assert.ok(Math.abs(yen.jpyc.buyCost - 8.55 * 1.0005) < 1e-9, `buyCost=${yen.jpyc.buyCost}`);
+  assert.ok(Math.abs(yen.jpyc.sellProceeds - 8.54 * 0.9995) < 1e-9, `sellProceeds=${yen.jpyc.sellProceeds}`);
+});
+
+test("엔 전신환 고시가 없으면 엔화 전용 fallback 스프레드를 쓴다", () => {
+  const noTt = derivedSpreads({ base: 8.637 }, 0.02);
+  assert.equal(noTt.buy, 0.02);
+  assert.equal(noTt.sell, 0.02);
+  assert.equal(noTt.derived, false);
+  // USD 기본 호출은 여전히 1% fallback 이다.
+  assert.equal(derivedSpreads({ base: 1390.5 }).buy, 0.01);
+});
+
 // ── 3. 신호 판정 ──────────────────────────────────────────────────────
 function evaluateWith({ market, config = baseConfig(), history = [], now = 2_000_000_000, manualQuotes = {} }) {
   const quotes = buildQuotes({ market, config, manualQuotes, now });
@@ -305,6 +446,49 @@ test("가격이 붙어 있으면 아무것도 발동하지 않는다", () => {
   assert.equal(signals.to_tether.fired, false);
   assert.equal(signals.to_dollar.fired, false);
   assert.ok(signals.to_tether.value < 0 && signals.to_dollar.value < 0, "수수료·스프레드 때문에 둘 다 음수여야 한다");
+});
+
+// ── 엔화·JPYC 신호 ────────────────────────────────────────────────────
+test("JPYC가 엔보다 싸면 엔→JPYC만 발동한다 (엔 역프)", () => {
+  const signals = evaluateWith({ market: yenMarketOf() });
+  // 엔 매도 8.637 (우대 100%라 기준율 그대로) / JPYC 매수 8.55×1.0005 = 8.554275
+  // 8.637 / 8.554275 − 1 = +0.9672%
+  assert.ok(Math.abs(signals.yen_to_jpyc.value - 0.9672) < 0.001, `${signals.yen_to_jpyc.value}`);
+  assert.equal(signals.yen_to_jpyc.fired, true);
+  // JPYC 매도 8.54×0.9995 = 8.53573 / 엔 매수 8.637 − 1 = −1.172%
+  assert.ok(signals.jpyc_to_yen.value < 0, `${signals.jpyc_to_yen.value}`);
+  assert.equal(signals.jpyc_to_yen.fired, false);
+  // USD 쪽 신호는 여전히 정상 계산된다.
+  assert.ok(signals.to_tether.value > 0);
+});
+
+test("JPYC가 엔보다 비싸면 JPYC→엔만 발동한다 (엔 김프)", () => {
+  const signals = evaluateWith({ market: yenMarketOf({ jpycAsk: 8.75, jpycBid: 8.74 }) });
+  // JPYC 매도 8.74×0.9995 = 8.73563 / 엔 매수 8.637 − 1 = +1.1419%
+  assert.ok(Math.abs(signals.jpyc_to_yen.value - 1.1419) < 0.002, `${signals.jpyc_to_yen.value}`);
+  assert.equal(signals.jpyc_to_yen.fired, true);
+  // JPYC 매수 8.75×1.0005 = 8.754375 / 엔 매도 8.637 − 1 = −1.3415%
+  assert.equal(signals.yen_to_jpyc.fired, false);
+});
+
+test("엔화·JPYC 임계값 언저리 — 0.49% 는 안 울리고 0.51% 는 울린다", () => {
+  // 목표 수익률 r 을 만드는 JPYC ask: yenSell / (ask × (1+fee)) − 1 = r
+  const askFor = (r) => 8.637 / (1 + r / 100) / 1.0005;
+  const below = evaluateWith({ market: yenMarketOf({ jpycAsk: askFor(0.49), jpycBid: 8.54 }) });
+  const above = evaluateWith({ market: yenMarketOf({ jpycAsk: askFor(0.51), jpycBid: 8.54 }) });
+  assert.equal(below.yen_to_jpyc.fired, false, `아래쪽 ${below.yen_to_jpyc.value}`);
+  assert.equal(above.yen_to_jpyc.fired, true, `위쪽 ${above.yen_to_jpyc.value}`);
+});
+
+test("엔 고시·JPYC 호가가 없으면 엔 신호는 조용히 생기지 않는다", () => {
+  const 없이 = evaluateWith({ market: marketOf() });
+  assert.equal(없이.yen_to_jpyc, undefined);
+  assert.equal(없이.jpyc_to_yen, undefined);
+
+  // 호가만 있고 고시가 없는 부분 실패 — 엔 신호는 없되 USD 는 정상이다.
+  const 호가만 = evaluateWith({ market: marketOf({ jpyc: { ask: 8.55, bid: 8.54, at: 1 } }) });
+  assert.equal(호가만.yen_to_jpyc, undefined);
+  assert.ok(호가만.to_tether.value > 0);
 });
 
 test("임계값 언저리 — 0.49% 는 안 울리고 0.51% 는 울린다", () => {
@@ -517,6 +701,23 @@ test("금액 환산이 사람 말로 나온다", () => {
   assert.equal(notionalLine(0.42, 10_000_000), "1,000만원 기준 +42,000원");
 });
 
+test("꼬리표에 엔 고시와 JPYC 호가를 남긴다", () => {
+  const market = yenMarketOf();
+  const config = baseConfig();
+  const quotes = buildQuotes({ market, config });
+  const text = marketFooter(market, quotes);
+  assert.match(text, /엔 고시 <b>8\.64<\/b>/, text);
+  assert.match(text, /업비트 JPYC 8\.54\/8\.55/, text);
+
+  // /시세 에도 엔화·JPYC 블록이 나온다.
+  const signals = evaluate({ market, quotes, config });
+  assert.match(formatRates({ market, quotes, signals, config }), /엔화·JPYC/);
+
+  // 엔 데이터가 없으면 그 줄도 없다 — "값이 없다"와 "0이다"는 다르다.
+  const bare = marketFooter(marketOf(), buildQuotes({ market: marketOf(), config }));
+  assert.doesNotMatch(bare, /엔 고시/);
+});
+
 // ── 8. 텔레그램 명령 ──────────────────────────────────────────────────
 test("명령을 파싱하고 남의 챗은 무시한다", () => {
   assert.deepEqual(parseCommand("/임계 toTetherPct 0.25"), { name: "임계", args: ["toTetherPct", "0.25"] });
@@ -540,6 +741,9 @@ const run = (text, state = { ...EMPTY_STATE }, config = baseConfig(), now = 1_00
 asyncTest("/임계 는 값을 바꾸고, 모르는 키는 거절한다", async () => {
   const ok = await run("/임계 toTetherPct 0.25");
   assert.equal(ok.state.overrides.thresholds.toTetherPct, 0.25);
+
+  const jpyc = await run("/임계 toJpycPct 1.0");
+  assert.equal(jpyc.state.overrides.thresholds.toJpycPct, 1.0, "엔화 신호도 /임계 로 조여야 한다");
 
   const bad = await run("/임계 없는키 0.25");
   assert.match(bad.reply, /모르는 임계값/);
