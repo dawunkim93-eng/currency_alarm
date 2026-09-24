@@ -31,8 +31,8 @@ const SETTABLE = new Set([
   "digest.everyMinutes",
   "digest.quietHours.from",
   "digest.quietHours.to",
-  "alerts.cooldownMinutes",
-  "alerts.escalationPct",
+  "alerts.reminderHours",
+  "alerts.releaseMarginPct",
   "alerts.recoverNotice",
 ]);
 
@@ -52,7 +52,7 @@ export const MENU_COMMANDS = [
   { command: "suit", description: "달러·엔화 매수 적합성 (3조건×4기간)" },
   { command: "config", description: "설정 보기 (임계값·우대율)" },
   { command: "threshold", description: "임계값 변경 — /threshold toTetherPct 0.5" },
-  { command: "set", description: "설정 변경 — /set alerts.escalationPct 0.5" },
+  { command: "set", description: "설정 변경 — /set alerts.reminderHours 12" },
   { command: "limit", description: "지정가 알림 — /limit 매수 1380" },
   { command: "quote", description: "실측 환율 입력 — /quote 토스 매도 1391.2" },
   { command: "pref", description: "우대율 조정 — /pref 스위치원 매수 90" },

@@ -572,12 +572,18 @@ test("기록이 하나뿐이면 급변동을 판단하지 않는다", () => {
   assert.equal(evaluateWith({ market: marketOf(), history: [{ t: now - 60_000, base: 1385 }], now }).move, undefined);
 });
 
-// ── 4. 쿨다운·재알림 ──────────────────────────────────────────────────
-const fakeSignal = (value, fired = true) => [{ id: "to_tether", value, fired }];
+// ── 4. 알림 — 전환·해제·리마인드 ─────────────────────────────────────
+const fakeSignal = (value, fired = true, extra = {}) => ({
+  id: "to_tether",
+  value,
+  fired,
+  threshold: 0.5,
+  ...extra,
+});
 
 test("처음 뜬 신호는 바로 보낸다", () => {
   const { fresh, nextAlerts } = selectAlerts({
-    signals: fakeSignal(0.5),
+    signals: [fakeSignal(0.5)],
     state: { ...EMPTY_STATE },
     config: baseConfig(),
     now: 1000,
@@ -586,52 +592,142 @@ test("처음 뜬 신호는 바로 보낸다", () => {
   assert.equal(nextAlerts.to_tether.active, true);
 });
 
-test("쿨다운 안에서 비슷한 값이면 조용히 넘어간다", () => {
-  const state = { ...EMPTY_STATE, alerts: { to_tether: { active: true, at: 1000, value: 0.5 } } };
-  const { fresh } = selectAlerts({
-    signals: fakeSignal(0.55),
-    state,
+test("발동이 유지되면 조용하고, 해제될 때만 한 번 알린다", () => {
+  const t0 = 1000;
+  const first = selectAlerts({ signals: [fakeSignal(0.6)], state: { ...EMPTY_STATE }, config: baseConfig(), now: t0 });
+  assert.equal(first.fresh.length, 1);
+  const stateAfter = { alerts: first.nextAlerts };
+
+  // 값이 깊어져도(0.6 → 0.9) 무음 — 예전의 쿨다운·escalation 재전송은 없다.
+  const still = selectAlerts({
+    signals: [fakeSignal(0.9)],
+    state: stateAfter,
     config: baseConfig(),
-    now: 1000 + 5 * 60_000,
+    now: t0 + 5 * 60_000,
   });
-  assert.equal(fresh.length, 0);
+  assert.equal(still.fresh.length, 0, "발동 지속은 리마인드 전까지 무음");
+  assert.equal(still.nextAlerts.to_tether.active, true);
+
+  // 마진 안(0.5 − 0.05 = 0.45 위)에서 꺼져도 해제 확정이 아니다 — 경계 부유 무음.
+  const float = selectAlerts({
+    signals: [fakeSignal(0.48, false)],
+    state: { alerts: still.nextAlerts },
+    config: baseConfig(),
+    now: t0 + 10 * 60_000,
+  });
+  assert.equal(float.recovered.length, 0, "마진 안 부유는 해제로 세지 않는다");
+  assert.equal(float.nextAlerts.to_tether.active, true, "부유 중엔 발동 상태 유지");
+
+  // 마진 아래로 내려가면 해제 1회.
+  const released = selectAlerts({
+    signals: [fakeSignal(0.2, false)],
+    state: { alerts: still.nextAlerts },
+    config: baseConfig(),
+    now: t0 + 15 * 60_000,
+  });
+  assert.equal(released.recovered.length, 1);
+  assert.equal(released.nextAlerts.to_tether.active, false);
+
+  // 해제 뒤 같은 값이면 아무것도 안 온다.
+  const quiet = selectAlerts({
+    signals: [fakeSignal(0.2, false)],
+    state: { alerts: released.nextAlerts },
+    config: baseConfig(),
+    now: t0 + 20 * 60_000,
+  });
+  assert.equal(quiet.fresh.length, 0);
+  assert.equal(quiet.recovered.length, 0);
 });
 
-test("쿨다운 중이라도 0.1%p 더 좋아지면 다시 알린다", () => {
-  const state = { ...EMPTY_STATE, alerts: { to_tether: { active: true, at: 1000, value: 0.5 } } };
-  const { fresh } = selectAlerts({
-    signals: fakeSignal(0.61),
+test("전환 — 김프가 풀리고 역프가 뜨면 해제·발동이 한 세트로 온다", () => {
+  const t0 = 1000;
+  const state = { ...EMPTY_STATE, alerts: { to_dollar: { active: true, at: t0, value: 0.6 } } };
+  // 김프 신호가 꺼지고(0.2) 역프가 켜진다(0.6) — 부호 뒤집힘의 전형.
+  const { fresh, recovered } = selectAlerts({
+    signals: [
+      { id: "to_dollar", value: 0.2, fired: false, threshold: 0.5, kind: "arb" },
+      { id: "to_tether", value: 0.7, fired: true, threshold: 0.5, kind: "arb" },
+    ],
     state,
     config: baseConfig(),
-    now: 1000 + 60_000,
+    now: t0 + 60_000,
   });
-  assert.equal(fresh.length, 1, "0.5 → 0.61 은 재알림 대상");
+  assert.deepEqual(fresh.map((s) => s.id), ["to_tether"]);
+  assert.deepEqual(recovered.map((s) => s.id), ["to_dollar"]);
 });
 
-test("쿨다운이 지나면 같은 값이어도 다시 알린다", () => {
-  const state = { ...EMPTY_STATE, alerts: { to_tether: { active: true, at: 1000, value: 0.5 } } };
-  const { fresh } = selectAlerts({
-    signals: fakeSignal(0.5),
+test("발동 지속 리마인드 — reminderHours 마다 한 번", () => {
+  const t0 = 1000;
+  const config = deepMerge(baseConfig(), { alerts: { reminderHours: 24 } });
+  const first = selectAlerts({ signals: [fakeSignal(0.6)], state: { ...EMPTY_STATE }, config, now: t0 });
+  assert.equal(first.fresh[0].reminder, undefined, "첫 발동은 전환 알림이다");
+
+  // 24시간이 지나기 전엔 무음.
+  const before = selectAlerts({
+    signals: [fakeSignal(0.65)],
+    state: { alerts: first.nextAlerts },
+    config,
+    now: t0 + 23 * 3_600_000,
+  });
+  assert.equal(before.fresh.length, 0);
+
+  // 24시간이 지나면 리마인드 1회.
+  const remind = selectAlerts({
+    signals: [fakeSignal(0.65)],
+    state: { alerts: first.nextAlerts },
+    config,
+    now: t0 + 24 * 3_600_000 + 60_000,
+  });
+  assert.equal(remind.fresh.length, 1);
+  assert.equal(remind.fresh[0].reminder, true);
+  assert.equal(remind.fresh[0].id, "to_tether");
+
+  // 리마인드 직후엔 다시 무음 — 다음 리마인드까지.
+  const after = selectAlerts({
+    signals: [fakeSignal(0.65)],
+    state: { alerts: remind.nextAlerts },
+    config,
+    now: remind.nextAlerts.to_tether.at + 10 * 3_600_000,
+  });
+  assert.equal(after.fresh.length, 0);
+});
+
+test("마진 안 부유 후 다시 발동해도 재알림하지 않는다", () => {
+  const t0 = 1000;
+  const state = { alerts: { to_tether: { active: true, at: t0, value: 0.6 } } };
+  // 0.48 로 부유(마진 안 → 상태 유지) → 다시 0.6 발동. 전환이 아니므로 무음.
+  const dipped = selectAlerts({
+    signals: [fakeSignal(0.48, false)],
     state,
     config: baseConfig(),
-    now: 1000 + 31 * 60_000,
+    now: t0 + 60_000,
   });
-  assert.equal(fresh.length, 1);
+  assert.equal(dipped.recovered.length, 0);
+  const refired = selectAlerts({
+    signals: [fakeSignal(0.55)],
+    state: { alerts: dipped.nextAlerts },
+    config: baseConfig(),
+    now: t0 + 120_000,
+  });
+  assert.equal(refired.fresh.length, 0, "부유 후 회복은 새 알림이 아니다");
+  assert.equal(refired.nextAlerts.to_tether.active, true);
 });
 
-test("신호가 풀리면 해제 알림을 한 번 보내고 다시 보내지 않는다", () => {
-  const state = { ...EMPTY_STATE, alerts: { to_tether: { active: true, at: 1000, value: 0.5 } } };
-  const first = selectAlerts({ signals: fakeSignal(0.1, false), state, config: baseConfig(), now: 2000 });
-  assert.equal(first.recovered.length, 1);
-  assert.equal(first.nextAlerts.to_tether.active, false);
-
-  const second = selectAlerts({
-    signals: fakeSignal(0.1, false),
-    state: { ...state, alerts: first.nextAlerts },
-    config: baseConfig(),
-    now: 3000,
+test("recoverNotice 를 끄면 해제 메시지는 없어도 상태는 바뀐다", () => {
+  const config = deepMerge(baseConfig(), { alerts: { recoverNotice: false } });
+  const t0 = 1000;
+  const state = { ...EMPTY_STATE, alerts: { to_tether: { active: true, at: t0, value: 0.6 } } };
+  const { recovered, nextAlerts } = selectAlerts({
+    signals: [fakeSignal(0.2, false)],
+    state,
+    config,
+    now: t0 + 60_000,
   });
-  assert.equal(second.recovered.length, 0);
+  assert.equal(recovered.length, 0);
+  assert.equal(nextAlerts.to_tether.active, false, "알림 없이도 상태는 풀려야 한다");
+  // 그러면 다음 발동은 전환으로 다시 알린다.
+  const refire = selectAlerts({ signals: [fakeSignal(0.6)], state: { ...nextAlerts }, config, now: t0 + 120_000 });
+  assert.equal(refire.fresh.length, 1);
 });
 
 // ── 5. 상태 ───────────────────────────────────────────────────────────

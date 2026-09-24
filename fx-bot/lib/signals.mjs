@@ -227,18 +227,24 @@ export function evaluate({ market, quotes, config, history = [], now = Date.now(
 }
 
 /**
- * 쿨다운·재알림 판정.
+ * 알림 판정 — 상태 **전환** 중심.
  *
  * 규칙은 셋뿐이다.
- *   1) 처음 뜬 신호는 바로 보낸다
- *   2) 쿨다운이 지났으면 다시 보낸다
- *   3) 쿨다운 중이라도 직전 알림보다 `escalationPct`(%p) 더 좋아졌으면 보낸다
+ *   1) 처음 뜬 신호는 바로 보낸다 (미발동 → 발동, 예: 김프 → 역프 전환)
+ *   2) 풀린 신호는 한 번 해제 알림을 보낸다 (발동 → 미발동)
+ *      단, 값이 임계 바로 아래에서 왔다갔다하면 발동↔해제가 도배된다.
+ *      그래서 해제는 기준보다 `releaseMarginPct` 만큼 아래로 내려와야 확정한다 —
+ *      경계 부유 구간은 조용히 유지된다.
+ *   3) 발동이 오래 지속되면 `reminderHours` 마다 한 번 리마인드를 보낸다.
+ *      전환이 없어도 "지금 역프 중"임을 잊지 않게 하기 위해서다.
  *
- * 3번이 없으면 0.5%에서 알림 한 번 받고 1.1%까지 벌어지는 걸 놓친다.
+ * 예전의 쿨다운 재전송·escalation 재알림은 소음의 원인이라 없앴다. 발동이 유지
+ * 되는 동안 값이 깊어져도 무음이다 — 현재 수치는 /신호 로 언제든 볼 수 있다.
  */
 export function selectAlerts({ signals, state, config, now = Date.now() }) {
-  const cooldownMs = config.alerts.cooldownMinutes * 60_000;
-  const escalation = config.alerts.escalationPct;
+  const alerts = config.alerts ?? {};
+  const reminderMs = (alerts.reminderHours ?? 24) * 3_600_000;
+  const releaseMargin = alerts.releaseMarginPct ?? 0.05;
   const fresh = [];
   const recovered = [];
   const nextAlerts = { ...(state.alerts ?? {}) };
@@ -247,19 +253,28 @@ export function selectAlerts({ signals, state, config, now = Date.now() }) {
     const previous = nextAlerts[signal.id];
 
     if (signal.fired) {
-      const first = !previous?.active;
-      const cooledDown = previous ? now - previous.at >= cooldownMs : true;
-      const escalated = previous ? signal.value >= previous.value + escalation : true;
-      if (first || cooledDown || escalated) {
+      if (!previous?.active) {
+        // 전환 (미발동 → 발동)
         fresh.push(signal);
+        nextAlerts[signal.id] = { active: true, at: now, value: signal.value };
+        continue;
+      }
+      if (now - (previous.at ?? now) >= reminderMs) {
+        // 발동 지속 리마인드 — 전환은 아니지만 "아직 켜져 있다"를 하루 한 번 알린다.
+        fresh.push({ ...signal, reminder: true });
         nextAlerts[signal.id] = { active: true, at: now, value: signal.value };
       }
       continue;
     }
 
     if (previous?.active) {
-      if (config.alerts.recoverNotice) recovered.push(signal);
-      nextAlerts[signal.id] = { active: false, at: now, value: signal.value };
+      // 발동 기준보다 마진만큼 아래로 내려왔을 때만 해제를 확정한다.
+      const marginOk = signal.threshold == null || signal.value < signal.threshold - releaseMargin;
+      if (marginOk) {
+        if (config.alerts.recoverNotice) recovered.push(signal);
+        nextAlerts[signal.id] = { active: false, at: now, value: signal.value };
+      }
+      // 마진 안(경계 부유)이면 상태를 유지한다 — 알림도 기록도 조용히.
     }
   }
 

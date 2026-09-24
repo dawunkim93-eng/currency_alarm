@@ -67,8 +67,8 @@
     "fetchTtlMinutes": 60
   },
   "alerts": {
-    "cooldownMinutes": 30,
-    "escalationPct": 0.1,
+    "reminderHours": 24,
+    "releaseMarginPct": 0.05,
     "recoverNotice": true
   },
   "digest": {

@@ -98,6 +98,15 @@ export function signalBlock(signal, config) {
   return lines.join("\n");
 }
 
+/** 알림 목록 조립 — 리마인드는 제목에 "지속 중"을 붙여 전환 알림과 구분한다. */
+export function formatAlert({ signals, market, quotes, config }) {
+  const blocks = signals.map((signal) => {
+    const block = signalBlock(signal, config);
+    return signal.reminder ? `${block}\n<i>🔔 지속 리마인드 — 전환이 아니라 아직 발동 중입니다.</i>` : block;
+  });
+  return [blocks.join(`\n\n`), RULE, marketFooter(market, quotes)].join("\n");
+}
+
 /** 모든 메시지 아래에 붙는 시세 꼬리표. 판단 근거를 매번 같이 남긴다. */
 export function marketFooter(market, quotes) {
   const forex = market.forex;
@@ -121,12 +130,6 @@ export function marketFooter(market, quotes) {
 }
 
 const RULE = "━━━━━━━━━━━━";
-
-export function formatAlert({ signals, market, quotes, config }) {
-  return [signals.map((signal) => signalBlock(signal, config)).join(`\n\n`), RULE, marketFooter(market, quotes)].join(
-    "\n",
-  );
-}
 
 export function formatRecovered({ signals, market, quotes }) {
   const body = signals
@@ -277,7 +280,7 @@ export function formatConfig(config, state) {
     muted,
     `· 기준금액 ${compactWon(config.notional)}`,
     `· 확인 주기 ${config.pollSeconds}초 · 요약 ${config.digest.everyMinutes}분`,
-    `· 쿨다운 ${config.alerts.cooldownMinutes}분 · 재알림 +${config.alerts.escalationPct}%p`,
+    `· 리마인드 ${config.alerts.reminderHours}시간 · 해제 마진 ${config.alerts.releaseMarginPct}%p`,
     `· 조용한 시간 ${config.digest.quietHours.from}시~${config.digest.quietHours.to}시`,
     "",
     "<b>임계값</b>",
@@ -303,8 +306,8 @@ export function formatHelp() {
     "<b>바꾸기</b>",
     "/임계 toTetherPct 0.5 — 임계값 변경 (엔화: toJpycPct·toYenPct)",
     "/설정값 notional 20000000 — 기준금액 등 변경",
-    "/설정값 alerts.escalationPct 0.5 — 재알림 폭 조절 (기본 0.1%p)",
-    "/설정값 alerts.cooldownMinutes 60 — 같은 신호 재알림 간격(분)",
+    "/설정값 alerts.reminderHours 12 — 지속 리마인드 주기(시간)",
+    "/설정값 alerts.releaseMarginPct 0.05 — 해제 확정 마진(%p)",
     "/지정가 매수 1380 · /지정가 매도 1400 · /지정가 해제",
     "/시세입력 토스 매수 1391.2 — 앱에 찍힌 실제 환율 반영 (USD 전용)",
     "/우대 스위치원 매수 0.9 — 우대율 조정",
@@ -314,6 +317,7 @@ export function formatHelp() {
     "/해제 — 음소거 풀기",
     "/도움 — 이 화면",
     "",
+    "<i>알림은 전환·급변동·리마인드만 옵니다 — 역프↔김프 전환 시, 환율 급변동 시, 발동 지속 시 하루 1회.</i>",
     "<i>채팅창에 / 를 치면 명령 메뉴가 뜹니다 (영문: /rate /signals …).</i>",
     "<i>은행 환율은 매매기준율 + 우대율 모형입니다. 앱 화면과 다르면 /시세입력 으로 맞추세요.</i>",
   ].join("\n");
