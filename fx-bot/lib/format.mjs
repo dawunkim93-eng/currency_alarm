@@ -77,12 +77,19 @@ function legLine(leg) {
  * 급변동 신호의 `value` 는 방향을 지운 절대값이다(재알림 판단용). 화면에는
  * 부호가 살아 있는 `signed` 를 보여야 한다 — "급락"인데 +0.47% 라고 찍히면
  * 제목과 숫자가 서로 다른 말을 한다.
+ *
+ * 적합성 신호는 `value` 가 밴드 랭크(0~3)라 퍼센트가 아니라 점수를 보여준다.
  */
 const displayValue = (signal) => signal.signed ?? signal.value;
 
+const headValue = (signal) => {
+  if (signal.kind === "suitability") return `${signal.score}/${signal.maxScore} ${signal.band}`;
+  return signedPct(displayValue(signal));
+};
+
 export function signalBlock(signal, config) {
   const lines = [
-    `${signal.emoji} <b>${escapeHtml(signal.title)}</b>  ${signedPct(displayValue(signal))}`,
+    `${signal.emoji} <b>${escapeHtml(signal.title)}</b>  ${escapeHtml(headValue(signal))}`,
     escapeHtml(signal.subtitle),
     ...signal.legs.map(legLine),
   ];
@@ -123,7 +130,10 @@ export function formatAlert({ signals, market, quotes, config }) {
 
 export function formatRecovered({ signals, market, quotes }) {
   const body = signals
-    .map((signal) => `☑️ <b>${escapeHtml(signal.title)}</b> 해제 — 현재 ${signedPct(displayValue(signal))}`)
+    .map((signal) => {
+      const now = signal.kind === "suitability" ? `${signal.score}/${signal.maxScore} ${signal.band}` : signedPct(displayValue(signal));
+      return `☑️ <b>${escapeHtml(signal.title)}</b> 해제 — 현재 ${escapeHtml(now)}`;
+    })
     .join("\n");
   return [body, RULE, marketFooter(market, quotes)].join("\n");
 }
@@ -138,12 +148,16 @@ export function formatDigest({ signals, market, quotes, config, since }) {
     });
 
   const moveSignal = signals.find((signal) => signal.id === "move");
+  const suitRows = signals
+    .filter((signal) => signal.kind === "suitability")
+    .map((signal) => `${signal.emoji} ${escapeHtml(signal.title)} <b>${signal.score}/${signal.maxScore}</b> <i>(${escapeHtml(signal.band)})</i>`);
   const head = [`📊 <b>정기 요약</b>`, ...(since ? [`<i>직전 요약 ${kstTime(since)}</i>`] : [])];
 
   return [
     head.join("\n"),
     rows.join("\n"),
     moveSignal ? `${moveSignal.emoji} ${escapeHtml(moveSignal.subtitle)}` : "",
+    ...suitRows,
     RULE,
     bankTable(quotes),
     RULE,
@@ -208,12 +222,45 @@ export function formatRates({ market, quotes, config, signals }) {
 
 export function formatSignals({ signals, market, quotes, config }) {
   const rows = signals.map((signal) => {
+    if (signal.kind === "suitability") {
+      return `${signal.emoji} <b>${escapeHtml(signal.title)}</b> ${signal.score}/${signal.maxScore} — ${escapeHtml(signal.band)} (${signal.threshold}점 이상 적합)`;
+    }
     // 기준까지 남은 폭은 절대값(value)으로 재고, 보여주는 숫자는 부호를 살린다.
     const gap = signal.threshold - signal.value;
     const mark = signal.fired ? "🔔 발동" : `${gap.toFixed(2)}%p 부족`;
     return `${signal.emoji} <b>${escapeHtml(signal.title)}</b> ${signedPct(displayValue(signal))} / 기준 ${signal.threshold}% — ${mark}`;
   });
   return ["🎯 <b>트리거 현황</b>", ...rows, RULE, marketFooter(market, quotes)].join("\n");
+}
+
+/**
+ * /적합 — 앱 화면처럼 기간별 3조건 O/X 표. 괄호 % 는 (현재 − 기준) ÷ 현재 × 100
+ * 이고, 부호만으로도 판정이 읽힌다 (환율·강도·갭: 규칙 상이 → O/X 규칙은
+ * suitability.mjs 주석 참조).
+ */
+export function formatSuitability({ signals }) {
+  const suits = signals.filter((signal) => signal.kind === "suitability");
+  if (!suits.length) {
+    return "🧭 <b>매수 적합성</b>\n일별 시세를 못 받아 판정을 만들 수 없습니다. 잠시 뒤 다시 시도하세요.";
+  }
+
+  const blocks = suits.map((signal) => {
+    const rows = signal.legs.length
+      ? signal.legs.map((leg) => `· ${escapeHtml(leg.label)} ${leg.value}/3`)
+      : [];
+    return [`${signal.emoji} <b>${escapeHtml(signal.title)}</b> — ${signal.score}/${signal.maxScore} (${escapeHtml(signal.band)})`, ...rows].join(
+      "\n",
+    );
+  });
+
+  return [
+    "🧭 <b>매수 적합성</b>",
+    "<i>3조건(환율·국제강도·갭) × 4기간 = 12점. 세븐스플릿 방식, 기준값은 최저/최고 중간값·평균.</i>",
+    "",
+    ...blocks,
+    RULE,
+    "<i>갭의 O 는 환율이 오를 여지이지 보장이 아닙니다. 극단값 하루가 기준값을 좌우할 수 있습니다.</i>",
+  ].join("\n");
 }
 
 export function formatConfig(config, state) {
@@ -250,6 +297,7 @@ export function formatHelp() {
     "<b>조회</b>",
     "/시세 — 은행·거래소·엔화/JPYC 현재가",
     "/신호 — 트리거별 현재 수치와 남은 폭",
+    "/적합 — 달러·엔화 매수 적합성 (3조건×4기간)",
     "/설정 — 임계값·우대율 보기",
     "",
     "<b>바꾸기</b>",

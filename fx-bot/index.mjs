@@ -17,9 +17,10 @@
  * 남은 시간만큼 텔레그램 롱폴링으로 대기하므로 놀고 있는 시간이 없다.
  */
 import { loadConfig } from "./lib/config.mjs";
-import { fetchMarket } from "./lib/sources.mjs";
+import { fetchMarket, fetchDailySeries } from "./lib/sources.mjs";
 import { buildQuotes } from "./lib/venues.mjs";
 import { evaluate, selectAlerts } from "./lib/signals.mjs";
+import { evaluateSuitability } from "./lib/suitability.mjs";
 import { applyOverrides, loadState, pushHistory, saveState } from "./lib/state.mjs";
 import { createBot, isAllowedChat, parseCommand } from "./lib/telegram.mjs";
 import { handleCommand, MENU_COMMANDS } from "./lib/commands.mjs";
@@ -66,9 +67,28 @@ const send = DRY_RUN
   : (text, options) => bot.send(text, options);
 
 let snapshotCache = null;
+/** 적합성 판정용 1년 일봉 캐시 — 일봉이라 자주 바뀌지 않는다. */
+let dailyCache = null;
 
 /** 지금 설정(파일 + 텔레그램에서 바꾼 값)을 합쳐 돌려준다. */
 const effectiveConfig = () => applyOverrides(config, state);
+
+/**
+ * 적합성 판정용 일별 시세. TTL 이 지나면 다시 받고, 실패하면 **이전 캐시를
+ * 계속 쓴다** — 야후가 잠깐 막혀도 판정이 사라지지 않는다.
+ */
+async function dailySeries({ now = Date.now() } = {}) {
+  const ttl = (effectiveConfig().suitability?.fetchTtlMinutes ?? 60) * 60_000;
+  if (dailyCache && now - dailyCache.at <= ttl) return dailyCache.value;
+  try {
+    const value = await fetchDailySeries();
+    dailyCache = { at: now, value };
+    return value;
+  } catch (error) {
+    console.error(`[fx-bot] 적합성 일봉 수집 실패: ${error.message}`);
+    return dailyCache?.value ?? null;
+  }
+}
 
 async function takeSnapshot({ force = false, now = Date.now() } = {}) {
   if (!force && snapshotCache && now - snapshotCache.at <= SNAPSHOT_TTL_MS) return snapshotCache.value;
@@ -77,6 +97,16 @@ async function takeSnapshot({ force = false, now = Date.now() } = {}) {
   const market = await fetchMarket({ config: current });
   const quotes = buildQuotes({ market, config: current, manualQuotes: state.manualQuotes, now });
   const signals = evaluate({ market, quotes, config: current, history: state.history, now });
+
+  // 적합성은 느린 지표라 실패해도 신호만 생략한다 — USD/JPYC 알림과 무관하다.
+  if (current.suitability?.enabled !== false) {
+    try {
+      const daily = await dailySeries({ now });
+      if (daily) signals.push(...evaluateSuitability({ daily, config: current }));
+    } catch (error) {
+      console.error(`[fx-bot] 적합성 판정 실패 (무시): ${error.message}`);
+    }
+  }
 
   const value = { market, quotes, signals };
   snapshotCache = { at: now, value };

@@ -9,7 +9,15 @@
  */
 import { DEFAULTS, VENUE_ALIASES, deepMerge, validateConfig } from "./config.mjs";
 import { getPath, setPath } from "./state.mjs";
-import { formatConfig, formatHelp, formatRates, formatSignals, kstTime, compactWon } from "./format.mjs";
+import {
+  formatConfig,
+  formatHelp,
+  formatRates,
+  formatSignals,
+  formatSuitability,
+  kstTime,
+  compactWon,
+} from "./format.mjs";
 
 /** `/설정값` 으로 바꿀 수 있는 경로. 아무 키나 열어두면 오타가 조용히 새 키를 만든다. */
 const SETTABLE = new Set([
@@ -17,6 +25,9 @@ const SETTABLE = new Set([
   "pollSeconds",
   "manualQuoteTtlMinutes",
   "jpyc.enabled",
+  "suitability.enabled",
+  "suitability.goodScore",
+  "suitability.fetchTtlMinutes",
   "digest.everyMinutes",
   "digest.quietHours.from",
   "digest.quietHours.to",
@@ -38,6 +49,7 @@ const SIDES = { 매수: "buy", 살때: "buy", buy: "buy", 매도: "sell", 팔때
 export const MENU_COMMANDS = [
   { command: "rate", description: "현재 시세 (은행·거래소·엔/JPYC)" },
   { command: "signals", description: "트리거 현황과 남은 폭" },
+  { command: "suit", description: "달러·엔화 매수 적합성 (3조건×4기간)" },
   { command: "config", description: "설정 보기 (임계값·우대율)" },
   { command: "threshold", description: "임계값 변경 — /threshold toTetherPct 0.5" },
   { command: "set", description: "설정 변경 — /set alerts.escalationPct 0.5" },
@@ -46,7 +58,7 @@ export const MENU_COMMANDS = [
   { command: "pref", description: "우대율 조정 — /pref 스위치원 매수 90" },
   { command: "mute", description: "N분간 알림 멈춤 — /mute 60" },
   { command: "unmute", description: "음소거 해제" },
-  { command: "help", description: "도움말 (한글: /시세 /신호 /임계 …)" },
+  { command: "help", description: "도움말 (한글: /시세 /신호 /적합 …)" },
 ];
 
 /** "1,391.2" → 1391.2 · "0.25%" → 0.25 · "90%" → 90 (우대율 변환은 호출부에서) */
@@ -80,6 +92,13 @@ export async function handleCommand({ command, state, config, snapshot, now = Da
     case "signals": {
       const snap = await snapshot();
       return reply(formatSignals({ ...snap, config }));
+    }
+
+    case "적합":
+    case "suit":
+    case "suitability": {
+      const snap = await snapshot();
+      return reply(formatSuitability({ signals: snap.signals }));
     }
 
     case "설정":

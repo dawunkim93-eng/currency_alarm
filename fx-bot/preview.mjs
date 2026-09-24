@@ -10,7 +10,8 @@
 import { DEFAULTS, deepMerge } from "./lib/config.mjs";
 import { buildQuotes } from "./lib/venues.mjs";
 import { evaluate } from "./lib/signals.mjs";
-import { formatAlert, formatDigest, formatRates, formatSignals } from "./lib/format.mjs";
+import { evaluateSuitability } from "./lib/suitability.mjs";
+import { formatAlert, formatDigest, formatRates, formatSignals, formatSuitability } from "./lib/format.mjs";
 
 const config = deepMerge(DEFAULTS, { token: "preview", chatIds: ["0"] });
 const now = Date.now();
@@ -54,6 +55,28 @@ const history = [
 const quotes = buildQuotes({ market, config, now });
 const signals = evaluate({ market, quotes, config, history, now });
 
+// 적합성 — 실제와 같은 모양의 1년 일봉을 흉내 낸다(하락 추세 + DXY 최근 반등).
+const DAY = 86_400_000;
+const rateBars = [];
+const dxyBars = [];
+const jpyBars = [];
+for (let i = 0; i < 400; i += 1) {
+  const t = now - (399 - i) * DAY;
+  rateBars.push({ t, c: 1400 - 0.2 * i });
+  dxyBars.push({ t, c: i < 395 ? 110 - 0.02 * i : 102.02 + (i - 395) * 0.25 });
+  jpyBars.push({ t, c: 150 + 0.05 * i });
+}
+const suitSignals = evaluateSuitability({
+  daily: {
+    usdkrw: { bars: rateBars, current: 1313 },
+    dxy: { bars: dxyBars, current: 102.4 },
+    jpykrw: { bars: rateBars.map((bar) => ({ t: bar.t, c: bar.c / 160 })), current: 8.2 },
+    usdjpy: { bars: jpyBars, current: 158 },
+  },
+  config,
+});
+signals.push(...suitSignals);
+
 const strip = (text) => text.replace(/<[^>]+>/g, "");
 const show = (title, text) => console.log(`\n══════ ${title} ══════\n${strip(text)}`);
 
@@ -61,3 +84,4 @@ show("트리거 알림", formatAlert({ signals: signals.filter((s) => s.fired), 
 show("정기 요약", formatDigest({ signals, market, quotes, config, since: now - 3_600_000 }));
 show("/시세", formatRates({ market, quotes, signals, config }));
 show("/신호", formatSignals({ signals, market, quotes, config }));
+show("/적합", formatSuitability({ signals }));

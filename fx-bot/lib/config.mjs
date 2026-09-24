@@ -56,6 +56,20 @@ export const DEFAULTS = {
     enabled: true,
   },
 
+  /**
+   * 달러·엔화 매수 적합성 (세븐스플릿 방식) — 3조건 × 4기간 = 12점 채점.
+   *   windows      판정 기간(일) — 1·3·6·12개월
+   *   goodScore    이 개수 이상이면 '적합' 밴드. 만점(최대 점수)은 별도 밴드.
+   *   fetchTtlMinutes  1년 일봉 캐시 시간. 일봉이라 1시간이면 충분하다.
+   * 밴드가 뒤집힐 때만 알리고, 정기 요약에는 항상 점수를 남긴다.
+   */
+  suitability: {
+    enabled: true,
+    windows: [30, 90, 180, 365],
+    goodScore: 9,
+    fetchTtlMinutes: 60,
+  },
+
   thresholds: {
     /** 달러 → 테더 갈아타기 이득률(%). 은행 달러 매도 대금으로 테더를 살 때 남는 폭. */
     toTetherPct: 0.5,
@@ -201,6 +215,15 @@ export function validateConfig(config) {
     if (key.endsWith("Pct") && value > 20) {
       problems.push(`thresholds.${key} 가 ${value} 입니다. 퍼센트 단위(0.3 = 0.3%)가 맞는지 확인하세요.`);
     }
+  }
+
+  const suit = config.suitability ?? {};
+  const maxScore = (suit.windows?.length ?? 4) * 3;
+  if (suit.goodScore != null && !(suit.goodScore >= 1 && suit.goodScore <= maxScore)) {
+    problems.push(`suitability.goodScore 는 1~${maxScore} 사이 개수입니다 (지금: ${suit.goodScore}).`);
+  }
+  if (suit.windows != null && (!Array.isArray(suit.windows) || !suit.windows.length || suit.windows.some((d) => typeof d !== "number" || d < 7))) {
+    problems.push("suitability.windows 는 7일 이상의 일수 배열이어야 합니다 (예: [30, 90, 180, 365]).");
   }
   return problems;
 }

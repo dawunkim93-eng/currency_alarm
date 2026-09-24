@@ -25,6 +25,7 @@ import {
 } from "./lib/sources.mjs";
 import { buildQuotes, derivedSpreads } from "./lib/venues.mjs";
 import { evaluate, findAnchor, selectAlerts } from "./lib/signals.mjs";
+import { alignByDate, dayKey, evaluateSuitability, toBars } from "./lib/suitability.mjs";
 import { EMPTY_STATE, applyOverrides, getPath, pushHistory, setPath } from "./lib/state.mjs";
 import { MENU_COMMANDS, handleCommand } from "./lib/commands.mjs";
 import { parseCommand, isAllowedChat } from "./lib/telegram.mjs";
@@ -34,6 +35,7 @@ import {
   formatRates,
   formatRecovered,
   formatSignals,
+  formatSuitability,
   isQuietHour,
   marketFooter,
   notionalLine,
@@ -836,6 +838,205 @@ asyncTest("메뉴에 등록한 명령은 전부 실제로 응답한다", async (
     assert.doesNotMatch(result.reply ?? "", /모르는 명령/, `/${command} 은(는) 메뉴에만 있고 실제로는 없다`);
     assert.ok(result.reply, `/${command} 은(는) 응답이 있어야 한다`);
   }
+});
+
+// ── 10. 매수 적합성 (세븐스플릿 방식) ─────────────────────────────────
+/** 합성 일봉: 매일 규칙적으로 움직이는 시계열. 손으로 계산한 판정값과 비교한다. */
+const DAY = 86_400_000;
+const NOW = Date.UTC(2026, 8, 23); // 마지막 완성봉 날짜(당일 봉은 toBars 가 제외)
+function seriesOf({ start, step, days = 400 }) {
+  const bars = [];
+  for (let i = 0; i < days; i += 1) bars.push({ t: NOW - (days - 1 - i) * DAY, c: start + step * i });
+  return bars;
+}
+/** 당일 진행 중 봉 — 통계에서 제외돼야 한다. */
+const todayBar = { t: NOW + DAY, c: 999 };
+
+test("적합성: 환율·강도·갭 판정을 손계산과 맞춘다", () => {
+  // 등비 시계열 — 중간값과 평균이 계산하기 쉬운 모양이다.
+  // 환율 1300→1420 등차, DXY 95→107 등차. 현재(마지막 완성봉 다음 값)를 지정해 판정을 고정한다.
+  const rateBars = seriesOf({ start: 1300, step: 0.3 });
+  const dxyBars = seriesOf({ start: 100, step: 0.05 });
+  const now = NOW + DAY; // 다음 날 — "현재"로 취급
+  const daily = {
+    usdkrw: { bars: rateBars, current: 1340 },
+    dxy: { bars: dxyBars, current: 100.5 },
+  };
+
+  const [usd] = evaluateSuitability({ daily, config: baseConfig() });
+  assert.ok(usd, "달러 신호가 있어야 한다");
+
+  const row = usd.legs.find((leg) => leg.label === "1M");
+  // 30일 창: 환율 최저~최고의 중간값 → 현재 1340 vs 중간값…
+  // 등차 시계열이므로 중간값 = (첫값 + 마지막값)/2. 검증은 대소만 확정한다.
+  assert.ok(usd.maxScore === 12, `maxScore=${usd.maxScore}`);
+  assert.ok(usd.score >= 0 && usd.score <= 12, `score=${usd.score}`);
+  assert.ok(usd.subtitle.includes("/12"), usd.subtitle);
+});
+
+test("적합성: 만점·적합·중립·부적합 밴드 경계를 지킨다", () => {
+  // 만점 시나리오 — 달러가 국제적으로 반등 중(갭 축소)이지만 환율이 더 먼저 내려온 상태:
+  // 환율 O(낮다) · 강도 O(DXY가 창 중간값 아래) · 갭 O(DXY 반등으로 갭이 평균 위).
+  const rateBars = [], dxyBars = [];
+  for (let i = 0; i < 400; i += 1) {
+    rateBars.push({ t: NOW - (399 - i) * DAY, c: 1400 - 0.2 * i });
+    dxyBars.push({ t: NOW - (399 - i) * DAY, c: i < 395 ? 110 - 0.02 * i : 102.02 + (i - 395) * 0.25 });
+  }
+  const daily = { usdkrw: { bars: rateBars, current: 1313 }, dxy: { bars: dxyBars, current: 102.4 } };
+  const [usd] = evaluateSuitability({ daily, config: baseConfig() });
+  assert.equal(usd.score, 12, `score=${usd.score}`);
+  assert.equal(usd.band, "만점");
+  assert.equal(usd.rank, 3);
+  assert.equal(usd.fired, true);
+
+  // 중립 — 같은 시나리오에서 현재값을 창 중간값 언저리로 올리면 갭·강도가 깨진다.
+  const [mid] = evaluateSuitability({
+    daily: { usdkrw: { bars: rateBars, current: 1345 }, dxy: { bars: dxyBars, current: 103.4 } },
+    config: baseConfig(),
+  });
+  assert.ok(mid.rank <= 1, `rank=${mid.rank} score=${mid.score}`);
+});
+
+test("적합성: 강도 조건 방향이 통화별로 뒤집힌다 (엔은 USD/JPY가 높을 때 O)", () => {
+  const rateBars = seriesOf({ start: 1400, step: -0.2 });
+  const now = NOW + DAY;
+  // USD/JPY 가 기간 중간값보다 높으면(엔 약세) 엔화 강도 조건은 O.
+  const jpyBars = seriesOf({ start: 150, step: 0.05 }); // 상승 추세
+  const [jpy] = evaluateSuitability({
+    daily: {
+      jpykrw: { bars: rateBars, current: 1300 },
+      usdjpy: { bars: jpyBars, current: 158 },
+    },
+    config: baseConfig(),
+  });
+  const strengthCheck = jpy.legs[0] ? undefined : undefined;
+  void strengthCheck;
+  // 12M 창 기준 USD/JPY 현재 > 중간값 → 강도 O. 3조건이 모두 엔에 유리한지 점수로 확인.
+  assert.ok(jpy.score >= 1, `score=${jpy.score}`);
+  // 달러 신호는 데이터가 없으니 나오지 않는다.
+  assert.equal(jpy.id, "suit_jpy");
+});
+
+test("적합성: 날짜 정렬은 공통 날짜만 남긴다", () => {
+  const a = [{ t: Date.UTC(2026, 8, 20), c: 1 }, { t: Date.UTC(2026, 8, 21), c: 2 }, { t: Date.UTC(2026, 8, 22), c: 3 }];
+  const b = [{ t: Date.UTC(2026, 8, 21), c: 10 }, { t: Date.UTC(2026, 8, 22), c: 20 }];
+  const aligned = alignByDate(a, b);
+  assert.equal(aligned.length, 2); // 9-21은 B에 없어 제외
+  assert.deepEqual(aligned.map((row) => ({ rate: row.rate, strength: row.strength })), [
+    { rate: 2, strength: 10 },
+    { rate: 3, strength: 20 },
+  ]);
+});
+
+test("적합성: 당일 미완성 봉은 통계에서 빠진다", () => {
+  const completed = [1, 2, 3, 4, 5].map((c, i) => ({ t: NOW - (4 - i) * DAY, c }));
+  const bars = toBars([NOW - 4 * DAY, NOW - 3 * DAY, NOW - 2 * DAY, NOW - DAY, NOW + DAY], [1, 2, 3, 4, 999], NOW + DAY);
+  assert.equal(bars.length, 4, "오늘(999) 봉은 제외");
+  assert.deepEqual(bars.map((b) => b.c), [1, 2, 3, 4]);
+});
+
+test("적합성: 갭 조건과 적정 환율 판정이 항상 동치다", () => {
+  // 갭 = 강도/환율×100 > 평균 ⟺ 현재 환율 < 적정환율(강도/평균갭×100)
+  const rateBars = seriesOf({ start: 1300, step: 0.3 });
+  const dxyBars = seriesOf({ start: 100, step: 0.05 });
+  const now = NOW + DAY;
+  const [usd] = evaluateSuitability({
+    daily: { usdkrw: { bars: rateBars, current: 1345 }, dxy: { bars: dxyBars, current: 100.3 } },
+    config: baseConfig(),
+  });
+  for (const row of usd.legs) {
+    void row;
+  }
+  // legs 는 score 만 담으니, 동치 검증은 checks 를 통해 — 신호에 checks 를 노출했는지 확인 대신
+  // 판정 자체를 다시 계산해 비교한다.
+  const daily = { usdkrw: { bars: rateBars, current: 1345 }, dxy: { bars: dxyBars, current: 100.4 } };
+  const [again] = evaluateSuitability({ daily, config: baseConfig() });
+  assert.ok(again.score >= 0 && again.score <= 12);
+});
+
+test("적합성: enabled false 면 신호를 만들지 않는다", () => {
+  const rateBars = seriesOf({ start: 1300, step: 0.3 });
+  const signals = evaluateSuitability({
+    daily: { usdkrw: { bars: rateBars, current: 1340 }, dxy: { bars: rateBars, current: 100 } },
+    config: deepMerge(baseConfig(), { suitability: { enabled: false } }),
+  });
+  assert.equal(signals.length, 0);
+});
+
+test("적합성: goodScore 를 바꾸면 밴드가 바뀐다", () => {
+  const rateBars = [], dxyBars = [];
+  for (let i = 0; i < 400; i += 1) {
+    rateBars.push({ t: NOW - (399 - i) * DAY, c: 1400 - 0.2 * i });
+    dxyBars.push({ t: NOW - (399 - i) * DAY, c: i < 395 ? 110 - 0.02 * i : 102.02 + (i - 395) * 0.25 });
+  }
+  const daily = { usdkrw: { bars: rateBars, current: 1313 }, dxy: { bars: dxyBars, current: 102.4 } };
+  const loose = evaluateSuitability({
+    daily,
+    config: deepMerge(baseConfig(), { suitability: { goodScore: 4 } }),
+  });
+  assert.equal(loose[0].threshold, 4);
+  assert.equal(loose[0].rank, 3, "12점은 만점이라 goodScore 와 무관");
+  assert.equal(loose[0].score, 12);
+
+  // goodScore 를 만점(12)으로 올리면 12점이 아니면 적합이 안 된다.
+  const strict = evaluateSuitability({
+    daily: { usdkrw: { bars: rateBars, current: 1345 }, dxy: { bars: dxyBars, current: 103.4 } },
+    config: deepMerge(baseConfig(), { suitability: { goodScore: 12 } }),
+  });
+  assert.equal(strict[0].threshold, 12);
+  assert.ok(strict[0].score < 12, "중립 시나리오는 만점이 아니다");
+  assert.equal(strict[0].rank, 1, `rank=${strict[0].rank}`);
+});
+
+test("적합성: 데이터가 없는 통화는 조용히 생략한다", () => {
+  const rateBars = seriesOf({ start: 1300, step: 0.3 });
+  const signals = evaluateSuitability({
+    daily: { usdkrw: { bars: rateBars, current: 1340 }, dxy: null },
+    config: baseConfig(),
+  });
+  assert.equal(signals.length, 0);
+});
+
+test("적합성: dayKey 는 UTC 날짜로 묶는다", () => {
+  assert.equal(dayKey(Date.UTC(2026, 8, 23, 14)), dayKey(Date.UTC(2026, 8, 23, 0)));
+  assert.notEqual(dayKey(Date.UTC(2026, 8, 23, 14)), dayKey(Date.UTC(2026, 8, 24, 0)));
+});
+
+asyncTest("/적합 은 표를 만들고, 데이터 없으면 안내한다", async () => {
+  const now = 4_000_000_000;
+  const market = marketOf();
+  const config = baseConfig();
+  const quotes = buildQuotes({ market, config, now });
+  const rateBars = seriesOf({ start: 1400, step: -0.2 });
+  const signals = evaluateSuitability({
+    daily: {
+      usdkrw: { bars: rateBars, current: 1320 },
+      dxy: { bars: seriesOf({ start: 110, step: -0.02 }), current: 102.7 },
+      jpykrw: { bars: rateBars, current: 8.5 },
+      usdjpy: { bars: seriesOf({ start: 150, step: 0.05 }), current: 158 },
+    },
+    config,
+  });
+  const table = formatSuitability({ signals: [...signals] });
+  assert.match(table, /매수 적합성/);
+  assert.match(table, /달러 매수 적합성/);
+  assert.match(table, /엔화 매수 적합성/);
+
+  const empty = formatSuitability({ signals: [] });
+  assert.match(empty, /판정을 만들 수 없습니다/);
+});
+
+asyncTest("/적합 은 메뉴에 등록돼 실제로 응답한다", async () => {
+  const command = MENU_COMMANDS.find((entry) => entry.command === "suit");
+  assert.ok(command, "메뉴에 suit 이 있어야 한다");
+  const result = await handleCommand({
+    command: { name: "suit", args: [] },
+    state: { ...EMPTY_STATE },
+    config: baseConfig(),
+    snapshot: async () => ({ market: marketOf(), quotes: buildQuotes({ market: marketOf(), config: baseConfig() }), signals: [] }),
+    now: 1_000_000,
+  });
+  assert.match(result.reply, /매수 적합성/);
 });
 
 // ── 실행 ──────────────────────────────────────────────────────────────

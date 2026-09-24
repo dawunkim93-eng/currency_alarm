@@ -60,6 +60,12 @@
   "jpyc": {
     "enabled": true
   },
+  "suitability": {
+    "enabled": true,
+    "windows": [30, 90, 180, 365],
+    "goodScore": 9,
+    "fetchTtlMinutes": 60
+  },
   "alerts": {
     "cooldownMinutes": 30,
     "escalationPct": 0.1,

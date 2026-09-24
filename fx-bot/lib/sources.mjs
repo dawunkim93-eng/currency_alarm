@@ -18,6 +18,9 @@
 // 저장소 이름은 바뀔 수 있으니 UA 에 박지 않는다. 봇 이름과 계정만 밝힌다.
 const UA = "fx-alert-bot/1.0 (+https://github.com/dawunkim93-eng)";
 
+// 적합성 판정용 — 야후 1년 일봉을 {t, c} 배열로 바꾸는 헬퍼를 순수 함수로 공유한다.
+import { toBars } from "./suitability.mjs";
+
 const DUNAMU_URL = "https://quotation-api-cdn.dunamu.com/v1/forex/recent?codes=FRX.KRWUSD";
 const NAVER_URL = "https://api.stock.naver.com/marketindex/exchange/FX_USDKRW";
 const YAHOO_URL = "https://query1.finance.yahoo.com/v8/finance/chart/KRW=X?interval=1m&range=1d";
@@ -294,6 +297,53 @@ export async function fetchUpbitJpyc(options = {}) {
   } catch {
     return parseUpbitTicker(await fetchJson(UPBIT_JPYC_TICKER_URL, options));
   }
+}
+
+// ── 적합성 판정용 일별 시세 (달러·엔화) ─────────────────────────────────
+// 야후 1년 일봉. DXY 는 미국 휴장일이 달라 봉 개수가 다르다 — 날짜 정렬은
+// suitability.mjs 의 alignByDate 가 한다. query1 이 막히면 query2 로 내려간다.
+
+const YAHOO_DAILY_URLS = {
+  usdkrw: ["https://query1.finance.yahoo.com/v8/finance/chart/KRW=X", "https://query2.finance.yahoo.com/v8/finance/chart/KRW=X"],
+  dxy: ["https://query1.finance.yahoo.com/v8/finance/chart/DX-Y.NYB", "https://query2.finance.yahoo.com/v8/finance/chart/DX-Y.NYB"],
+  usdjpy: ["https://query1.finance.yahoo.com/v8/finance/chart/JPY=X", "https://query2.finance.yahoo.com/v8/finance/chart/JPY=X"],
+  jpykrw: ["https://query1.finance.yahoo.com/v8/finance/chart/JPYKRW=X", "https://query2.finance.yahoo.com/v8/finance/chart/JPYKRW=X"],
+};
+
+export function parseYahooDaily(payload, { now = Date.now() } = {}) {
+  const result = payload?.chart?.result?.[0];
+  const timestamps = result?.timestamp;
+  const closes = result?.indicators?.quote?.[0]?.close;
+  const current = result?.meta?.regularMarketPrice;
+  if (!Array.isArray(timestamps) || !Array.isArray(closes) || typeof current !== "number") {
+    throw new Error("야후 일봉에서 시계열을 읽지 못했습니다.");
+  }
+  return { bars: toBars(timestamps, closes, now), current };
+}
+
+/** 4개 심볼의 1년 일봉. 실패한 심볼만 null — 살아 있는 통화의 판정은 계속 간다. */
+export async function fetchDailySeries(options = {}) {
+  const entries = await Promise.allSettled(
+    Object.entries(YAHOO_DAILY_URLS).map(async ([key, urls]) => {
+      let lastError;
+      for (const url of urls) {
+        try {
+          return parseYahooDaily(await fetchJson(`${url}?interval=1d&range=1y`, { retries: 0, ...options }), {
+            now: Date.now(),
+          });
+        } catch (error) {
+          lastError = error;
+        }
+      }
+      throw lastError;
+    }),
+  );
+  const daily = {};
+  Object.keys(YAHOO_DAILY_URLS).forEach((key, index) => {
+    const result = entries[index];
+    daily[key] = result.status === "fulfilled" ? result.value : null;
+  });
+  return daily;
 }
 
 /**
