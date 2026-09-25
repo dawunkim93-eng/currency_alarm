@@ -25,7 +25,7 @@ import {
 } from "./lib/sources.mjs";
 import { buildQuotes, derivedSpreads } from "./lib/venues.mjs";
 import { evaluate, findAnchor, selectAlerts } from "./lib/signals.mjs";
-import { alignByDate, dayKey, evaluateSuitability, toBars } from "./lib/suitability.mjs";
+import { alignByDate, dayKey, evaluateSuitability, isReportDue, toBars } from "./lib/suitability.mjs";
 import { EMPTY_STATE, applyOverrides, getPath, pushHistory, setPath } from "./lib/state.mjs";
 import { MENU_COMMANDS, handleCommand } from "./lib/commands.mjs";
 import { parseCommand, isAllowedChat } from "./lib/telegram.mjs";
@@ -36,7 +36,9 @@ import {
   formatRecovered,
   formatSignals,
   formatSuitability,
+  formatSuitabilityBriefing,
   isQuietHour,
+  kstEpochAt,
   marketFooter,
   notionalLine,
 } from "./lib/format.mjs";
@@ -1133,6 +1135,100 @@ asyncTest("/적합 은 메뉴에 등록돼 실제로 응답한다", async () => 
     now: 1_000_000,
   });
   assert.match(result.reply, /매수 적합성/);
+});
+
+// ── 11. 적합성 아침 브리핑 — 하루 한 번, 전환 알림 없음 ────────────────
+test("적합성 신호는 즉시 알림 대상이 아니다", () => {
+  // 만점(fired) 신호가 있어도 selectAlerts 는 조용히 건너뛴다 — 브리핑 담당.
+  const rateBars = seriesOf({ start: 1400, step: -0.2 });
+  const suit = evaluateSuitability({
+    daily: {
+      usdkrw: { bars: rateBars, current: 1313 },
+      dxy: { bars: seriesOf({ start: 110, step: -0.02 }), current: 102.4 },
+    },
+    config: baseConfig(),
+  });
+  assert.ok(suit.some((s) => s.fired), "만점 신호가 발동 상태여야 한다");
+
+  const { fresh, recovered } = selectAlerts({
+    signals: [...suit],
+    state: { ...EMPTY_STATE },
+    config: baseConfig(),
+    now: 1000,
+  });
+  assert.equal(fresh.length, 0, "적합성은 즉시 알림 대상이 아니다");
+  assert.equal(recovered.length, 0);
+  // 반대로 arb 신호는 여전히 알린다 — 건너뛴 게 kind 때문인지 확인.
+  const mixed = selectAlerts({
+    signals: [...suit, fakeSignal(0.6)],
+    state: { ...EMPTY_STATE },
+    config: baseConfig(),
+    now: 1000,
+  });
+  assert.deepEqual(mixed.fresh.map((s) => s.id), ["to_tether"]);
+});
+
+test("isReportDue — 8시 전엔 아니고, 8시를 넘기면 하루 한 번", () => {
+  const config = baseConfig();
+  // KST 07:59 — 아직 아니다. (KST 07:59 = UTC 22:59 전일)
+  const before8 = Date.UTC(2026, 8, 25, 22, 59, 0);
+  assert.equal(isReportDue({ config, lastSuitAt: 0, now: before8 }), false);
+  // KST 08:00 정각부터는 due. (UTC 23:00)
+  const at8 = Date.UTC(2026, 8, 25, 23, 0, 0);
+  assert.equal(isReportDue({ config, lastSuitAt: 0, now: at8 }), true);
+  // 오늘 8시를 넘어서(오후)도 due — 8시 실행이 누락됐다면 나중에라도 보낸다.
+  const at20 = Date.UTC(2026, 8, 26, 11, 0, 0); // KST 20:00
+  assert.equal(isReportDue({ config, lastSuitAt: 0, now: at20 }), true);
+  // 오늘 보냈다면 오늘은 다시 아니다.
+  assert.equal(isReportDue({ config, lastSuitAt: at8 + 30_000, now: at8 + 60_000 }), false);
+  // 내일이 되면 다시 due.
+  const nextDay = Date.UTC(2026, 8, 26, 22, 59, 0) + 3_600_000; // KST 08:00 (9/26)
+  assert.equal(isReportDue({ config, lastSuitAt: at8, now: nextDay }), true);
+  // enabled false 면 영원히 아니다.
+  const off = deepMerge(baseConfig(), { suitability: { enabled: false } });
+  assert.equal(isReportDue({ config: off, lastSuitAt: 0, now: at8 }), false);
+});
+
+test("kstEpochAt — KST 자정 경계를 정확히 자른다", () => {
+  // KST 08:00 = UTC 전날 23:00. 오늘(UTC 9/25 23:00 = KST 9/26 08:00)의 8시 마커는 자기 자신.
+  const ts = Date.UTC(2026, 8, 25, 23, 30, 0);
+  assert.equal(kstEpochAt(8, ts), Date.UTC(2026, 8, 25, 23, 0, 0));
+  // KST 9/26 07:59 는 "오늘 8시"가 아직 안 지났다 — 마커가 미래다.
+  const before = Date.UTC(2026, 8, 25, 22, 59, 0);
+  assert.equal(kstEpochAt(8, before), Date.UTC(2026, 8, 25, 23, 0, 0));
+  assert.ok(before < kstEpochAt(8, before), "7:59 는 오늘 8시 마커보다 이전");
+});
+
+test("정기 요약은 기본 꺼짐이다", () => {
+  assert.equal(DEFAULTS.digest.everyMinutes, 0, "사용자 요청: 요약은 끔이 기본");
+  // digest.everyMinutes 0 이면 digestDue 조건이 영원히 false 다.
+  assert.ok(!(DEFAULTS.digest.everyMinutes > 0));
+});
+
+test("브리핑은 달러·엔화를 한 메시지에 담는다", () => {
+  const rateBars = seriesOf({ start: 1400, step: -0.2 });
+  const signals = [
+    ...evaluateSuitability({
+      daily: {
+        usdkrw: { bars: rateBars, current: 1313 },
+        dxy: { bars: seriesOf({ start: 110, step: -0.02 }), current: 102.4 },
+        jpykrw: { bars: rateBars, current: 8.5 },
+        usdjpy: { bars: seriesOf({ start: 150, step: 0.05 }), current: 158 },
+      },
+      config: baseConfig(),
+    }),
+  ];
+  const market = marketOf();
+  const config = baseConfig();
+  const quotes = buildQuotes({ market, config });
+  const text = formatSuitabilityBriefing({ signals, market, quotes });
+  assert.ok(text, "브리핑이 만들어져야 한다");
+  assert.match(text, /아침 적합성 브리핑/);
+  assert.match(text, /달러 매수 적합성/);
+  assert.match(text, /엔화 매수 적합성/);
+
+  // 적합성 신호가 없으면 null — "판정 불가" 메시지 대신 조용히 건너뛴다.
+  assert.equal(formatSuitabilityBriefing({ signals: [], market, quotes }), null);
 });
 
 // ── 실행 ──────────────────────────────────────────────────────────────

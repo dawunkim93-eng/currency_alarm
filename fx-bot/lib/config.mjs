@@ -60,13 +60,15 @@ export const DEFAULTS = {
    * 달러·엔화 매수 적합성 (세븐스플릿 방식) — 3조건 × 4기간 = 12점 채점.
    *   windows      판정 기간(일) — 1·3·6·12개월
    *   goodScore    이 개수 이상이면 '적합' 밴드. 만점(최대 점수)은 별도 밴드.
+   *   reportHour   아침 브리핑 시각(KST 시). 매일 이 시각을 지나면 하루 한 번,
+   *                두 통화를 한 메시지로 보낸다 — 전환 알림은 보내지 않는다.
    *   fetchTtlMinutes  1년 일봉 캐시 시간. 일봉이라 1시간이면 충분하다.
-   * 밴드가 뒤집힐 때만 알리고, 정기 요약에는 항상 점수를 남긴다.
    */
   suitability: {
     enabled: true,
     windows: [30, 90, 180, 365],
     goodScore: 9,
+    reportHour: 8,
     fetchTtlMinutes: 60,
   },
 
@@ -104,8 +106,9 @@ export const DEFAULTS = {
   },
 
   digest: {
-    /** 정기 시세 요약 주기(분). 0 이면 끔. */
-    everyMinutes: 60,
+    /** 정기 시세 요약 주기(분). 0 이면 끔 — **기본은 끔**이다. 요약 대신 적합성
+     *  아침 브리핑이 하루 한 번 간다. 켜려면 /설정값 digest.everyMinutes 60 */
+    everyMinutes: 0,
     /** 조용한 시간대(KST, from 이상 ~ to 미만). 요약은 무조건 쉰다. */
     quietHours: { from: 23, to: 7, muteAlerts: false },
   },

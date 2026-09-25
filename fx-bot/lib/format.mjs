@@ -44,6 +44,22 @@ export function kstHour(ts = Date.now()) {
   );
 }
 
+/**
+ * 주어진 epoch 시각이 속한 **KST 날짜의 지정 시각**을 epoch(ms)로 돌려준다.
+ *
+ * "오늘 아침 8시를 지났나"를 판단하려면 KST 날짜 경계를 정확히 써야 한다 —
+ * KST 08:00 은 UTC 전날 23:00 이라, UTC 날짜로 자름과 어긋난다.
+ */
+export function kstEpochAt(hour, ts = Date.now()) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" })
+      .formatToParts(new Date(ts))
+      .map((part) => [part.type, part.value]),
+  );
+  // KST = UTC+9 — 그날 KST hour 시는 UTC (hour − 9) 시다.
+  return Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day), hour - 9, 0, 0);
+}
+
 export function isQuietHour(config, ts = Date.now()) {
   const quiet = config.digest?.quietHours;
   if (!quiet || quiet.from == null || quiet.to == null || quiet.from === quiet.to) return false;
@@ -237,6 +253,21 @@ export function formatSignals({ signals, market, quotes, config }) {
 }
 
 /**
+ * 적합성 블록 — /적합 표와 아침 브리핑이 같은 내용을 공유한다.
+ * 한 통화당 두 줄: "💵 달러 매수 적합성 — 8/12 (중립)" + 기간별 점수.
+ */
+function suitBlocks(signals) {
+  return signals
+    .filter((signal) => signal.kind === "suitability")
+    .map((signal) => {
+      const rows = signal.legs.map((leg) => `${escapeHtml(leg.label)} ${leg.value}/3`).join(" · ");
+      return `${signal.emoji} <b>${escapeHtml(signal.title)}</b> — ${signal.score}/${signal.maxScore} (${escapeHtml(signal.band)})${
+        rows ? `\n${rows}` : ""
+      }`;
+    });
+}
+
+/**
  * /적합 — 앱 화면처럼 기간별 3조건 O/X 표. 괄호 % 는 (현재 − 기준) ÷ 현재 × 100
  * 이고, 부호만으로도 판정이 읽힌다 (환율·강도·갭: 규칙 상이 → O/X 규칙은
  * suitability.mjs 주석 참조).
@@ -247,22 +278,28 @@ export function formatSuitability({ signals }) {
     return "🧭 <b>매수 적합성</b>\n일별 시세를 못 받아 판정을 만들 수 없습니다. 잠시 뒤 다시 시도하세요.";
   }
 
-  const blocks = suits.map((signal) => {
-    const rows = signal.legs.length
-      ? signal.legs.map((leg) => `· ${escapeHtml(leg.label)} ${leg.value}/3`)
-      : [];
-    return [`${signal.emoji} <b>${escapeHtml(signal.title)}</b> — ${signal.score}/${signal.maxScore} (${escapeHtml(signal.band)})`, ...rows].join(
-      "\n",
-    );
-  });
-
   return [
     "🧭 <b>매수 적합성</b>",
     "<i>3조건(환율·국제강도·갭) × 4기간 = 12점. 세븐스플릿 방식, 기준값은 최저/최고 중간값·평균.</i>",
     "",
-    ...blocks,
+    ...suitBlocks(signals),
     RULE,
     "<i>갭의 O 는 환율이 오를 여지이지 보장이 아닙니다. 극단값 하루가 기준값을 좌우할 수 있습니다.</i>",
+  ].join("\n");
+}
+
+/** 매일 아침 reportHour 에 한 번 보내는 브리핑 — 두 통화를 한 메시지로 묶는다. */
+export function formatSuitabilityBriefing({ signals, market, quotes }) {
+  const suits = signals.filter((signal) => signal.kind === "suitability");
+  if (!suits.length) return null;
+  return [
+    `🧭 <b>아침 적합성 브리핑</b> · ${kstTime()}`,
+    "",
+    ...suitBlocks(suits),
+    RULE,
+    "<i>세부: /적합 · 갭의 O 는 여지이지 보장이 아닙니다.</i>",
+    RULE,
+    marketFooter(market, quotes),
   ].join("\n");
 }
 
@@ -279,8 +316,8 @@ export function formatConfig(config, state) {
     "⚙️ <b>설정</b>",
     muted,
     `· 기준금액 ${compactWon(config.notional)}`,
-    `· 확인 주기 ${config.pollSeconds}초 · 요약 ${config.digest.everyMinutes}분`,
-    `· 리마인드 ${config.alerts.reminderHours}시간 · 해제 마진 ${config.alerts.releaseMarginPct}%p`,
+    `· 확인 주기 ${config.pollSeconds}초 · 요약 ${config.digest.everyMinutes > 0 ? `${config.digest.everyMinutes}분` : "끔"}`,
+    `· 적합성 브리핑 매일 ${config.suitability?.reportHour ?? 8}시 · 리마인드 ${config.alerts.reminderHours}시간 · 해제 마진 ${config.alerts.releaseMarginPct}%p`,
     `· 조용한 시간 ${config.digest.quietHours.from}시~${config.digest.quietHours.to}시`,
     "",
     "<b>임계값</b>",
@@ -317,7 +354,7 @@ export function formatHelp() {
     "/해제 — 음소거 풀기",
     "/도움 — 이 화면",
     "",
-    "<i>알림은 전환·급변동·리마인드만 옵니다 — 역프↔김프 전환 시, 환율 급변동 시, 발동 지속 시 하루 1회.</i>",
+    "<i>알림은 전환·급변동·리마인드만 옵니다 — 역프↔김프 전환 시, 환율 급변동 시, 발동 지속 시 하루 1회. 적합성은 매일 아침 브리핑 1회.</i>",
     "<i>채팅창에 / 를 치면 명령 메뉴가 뜹니다 (영문: /rate /signals …).</i>",
     "<i>은행 환율은 매매기준율 + 우대율 모형입니다. 앱 화면과 다르면 /시세입력 으로 맞추세요.</i>",
   ].join("\n");

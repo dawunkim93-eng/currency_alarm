@@ -24,7 +24,8 @@ import { evaluateSuitability } from "./lib/suitability.mjs";
 import { applyOverrides, loadState, pushHistory, saveState } from "./lib/state.mjs";
 import { createBot, isAllowedChat, parseCommand } from "./lib/telegram.mjs";
 import { handleCommand, MENU_COMMANDS } from "./lib/commands.mjs";
-import { formatAlert, formatDigest, formatRates, formatRecovered, isQuietHour, kstTime } from "./lib/format.mjs";
+import { formatAlert, formatDigest, formatRates, formatRecovered, formatSuitabilityBriefing, isQuietHour, kstTime } from "./lib/format.mjs";
+import { isReportDue } from "./lib/suitability.mjs";
 
 const argv = process.argv.slice(2);
 const flags = new Set(argv);
@@ -141,6 +142,20 @@ async function tick() {
     const since = state.lastDigestAt || null;
     state.lastDigestAt = now;
     await send(formatDigest({ signals, market, quotes, config: current, since }));
+  }
+
+  // 적합성 아침 브리핑 — 하루 한 번(reportHour, 기본 8시). 전환 알림 대신 이
+  // 한 통이 적합성의 유일한 알림이다. 데이터가 없으면 보내지 않고 그날 안에
+  // 재시도한다 — "판정 불가" 메시지는 노이즈다.
+  if (
+    !muted &&
+    isReportDue({ config: current, lastSuitAt: state.lastSuitAt, now })
+  ) {
+    const briefing = formatSuitabilityBriefing({ signals, market, quotes });
+    if (briefing) {
+      state.lastSuitAt = now;
+      await send(briefing);
+    }
   }
 
   saveState(config.statePath, state);

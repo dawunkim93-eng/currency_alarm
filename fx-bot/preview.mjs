@@ -11,7 +11,7 @@ import { DEFAULTS, deepMerge } from "./lib/config.mjs";
 import { buildQuotes } from "./lib/venues.mjs";
 import { evaluate } from "./lib/signals.mjs";
 import { evaluateSuitability } from "./lib/suitability.mjs";
-import { formatAlert, formatDigest, formatRates, formatSignals, formatSuitability } from "./lib/format.mjs";
+import { formatAlert, formatRates, formatSignals, formatSuitability, formatSuitabilityBriefing } from "./lib/format.mjs";
 
 const config = deepMerge(DEFAULTS, { token: "preview", chatIds: ["0"] });
 const now = Date.now();
@@ -81,7 +81,7 @@ const strip = (text) => text.replace(/<[^>]+>/g, "");
 const show = (title, text) => console.log(`\n══════ ${title} ══════\n${strip(text)}`);
 
 show("트리거 알림", formatAlert({ signals: signals.filter((s) => s.fired), market, quotes, config }));
-show("정기 요약", formatDigest({ signals, market, quotes, config, since: now - 3_600_000 }));
+show("아침 적합성 브리핑", formatSuitabilityBriefing({ signals, market, quotes }) ?? "(적합성 데이터 없음 — 브리핑 생략)");
 show("/시세", formatRates({ market, quotes, signals, config }));
 show("/신호", formatSignals({ signals, market, quotes, config }));
 show("/적합", formatSuitability({ signals }));

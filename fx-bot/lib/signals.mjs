@@ -238,6 +238,10 @@ export function evaluate({ market, quotes, config, history = [], now = Date.now(
  *   3) 발동이 오래 지속되면 `reminderHours` 마다 한 번 리마인드를 보낸다.
  *      전환이 없어도 "지금 역프 중"임을 잊지 않게 하기 위해서다.
  *
+ * 적합성(kind: suitability)은 여기서 다루지 않는다 — 느린 지표를 전환 알림으로
+ * 보내면 소음이 되고, 대신 **매일 아침 `suitability.reportHour` 시에 브리핑**으로
+ * 한 번 보낸다(index.mjs 의 isReportDue). 여기서는 조용히 건너뛴다.
+ *
  * 예전의 쿨다운 재전송·escalation 재알림은 소음의 원인이라 없앴다. 발동이 유지
  * 되는 동안 값이 깊어져도 무음이다 — 현재 수치는 /신호 로 언제든 볼 수 있다.
  */
@@ -250,6 +254,8 @@ export function selectAlerts({ signals, state, config, now = Date.now() }) {
   const nextAlerts = { ...(state.alerts ?? {}) };
 
   for (const signal of signals) {
+    // 적합성은 매일 아침 브리핑으로 간다 — 즉시 전환 알림 대상이 아니다.
+    if (signal.kind === "suitability") continue;
     const previous = nextAlerts[signal.id];
 
     if (signal.fired) {

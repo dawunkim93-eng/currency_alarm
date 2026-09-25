@@ -64,6 +64,7 @@
     "enabled": true,
     "windows": [30, 90, 180, 365],
     "goodScore": 9,
+    "reportHour": 8,
     "fetchTtlMinutes": 60
   },
   "alerts": {
@@ -72,7 +73,7 @@
     "recoverNotice": true
   },
   "digest": {
-    "everyMinutes": 60,
+    "everyMinutes": 0,
     "quietHours": {
       "from": 23,
       "to": 7,

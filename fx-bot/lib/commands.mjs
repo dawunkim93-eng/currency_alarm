@@ -27,6 +27,7 @@ const SETTABLE = new Set([
   "jpyc.enabled",
   "suitability.enabled",
   "suitability.goodScore",
+  "suitability.reportHour",
   "suitability.fetchTtlMinutes",
   "digest.everyMinutes",
   "digest.quietHours.from",

@@ -20,6 +20,11 @@ export const BANDS = ["부적합", "중립", "적합", "만점"];
 /** 12개 중 이 개수 이상이면 '적합'. 만점은 최대 점수일 때만 별도 밴드. */
 export const GOOD_SCORE_DEFAULT = 9;
 
+/** 아침 브리핑 기본 시각(KST 시). 매일 이 시각을 지나면 하루 한 번 보낸다. */
+export const REPORT_HOUR_DEFAULT = 8;
+
+import { kstHour, kstEpochAt } from "./format.mjs";
+
 const WINDOWS_DAYS = [30, 90, 180, 365];
 const WINDOW_LABELS = ["1M", "3M", "6M", "12M"];
 /** 창 안에 이보다 적은 봉이면 판정을 하지 않는다 (공휴일·수집 실패 방어). */
@@ -154,6 +159,22 @@ export function evaluateSuitability({ daily, config }) {
   }
 
   return signals;
+}
+
+/**
+ * 아침 브리핑 발송 시점 판정.
+ *
+ * "KST 시각이 reportHour(기본 8)를 넘었고, 마지막 발송이 오늘 그 시각보다
+ * 이전"이면 due — 하루에 정확히 한 번. 8시 실행이 지연·누락돼도 그날 안의
+ * 다음 틱이 대신 보낸다.
+ */
+export function isReportDue({ config, lastSuitAt = 0, now = Date.now() }) {
+  const suit = config?.suitability ?? {};
+  if (suit.enabled === false) return false;
+  const hour = typeof suit.reportHour === "number" ? suit.reportHour : REPORT_HOUR_DEFAULT;
+  if (hour < 0 || hour > 23) return false;
+  if (kstHour(now) < hour) return false;
+  return lastSuitAt < kstEpochAt(hour, now);
 }
 
 /** (현재 − 기준) ÷ 현재 × 100 — 앱 화면의 괄호 % 와 같은 규칙. */

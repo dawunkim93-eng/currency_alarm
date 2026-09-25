@@ -18,6 +18,8 @@ export const EMPTY_STATE = {
   history: [],
   alerts: {},
   lastDigestAt: 0,
+  /** 마지막 아침 브리핑 발송 시각 — 하루 한 번 판정 기준. */
+  lastSuitAt: 0,
   mutedUntil: 0,
   manualQuotes: {},
   overrides: {},
