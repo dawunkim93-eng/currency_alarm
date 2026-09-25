@@ -306,8 +306,16 @@ export async function fetchUpbitJpyc(options = {}) {
 const YAHOO_DAILY_URLS = {
   usdkrw: ["https://query1.finance.yahoo.com/v8/finance/chart/KRW=X", "https://query2.finance.yahoo.com/v8/finance/chart/KRW=X"],
   dxy: ["https://query1.finance.yahoo.com/v8/finance/chart/DX-Y.NYB", "https://query2.finance.yahoo.com/v8/finance/chart/DX-Y.NYB"],
-  usdjpy: ["https://query1.finance.yahoo.com/v8/finance/chart/JPY=X", "https://query2.finance.yahoo.com/v8/finance/chart/JPY=X"],
   jpykrw: ["https://query1.finance.yahoo.com/v8/finance/chart/JPYKRW=X", "https://query2.finance.yahoo.com/v8/finance/chart/JPYKRW=X"],
+  // 엔 강도 바스켓(suitability.YEN_BASKET) — 주요 통화 대비 엔화. 실패한 통화는
+  // 지수 자체를 만들 수 없으니 엔 적합성만 생략된다.
+  usd: ["https://query1.finance.yahoo.com/v8/finance/chart/JPY=X", "https://query2.finance.yahoo.com/v8/finance/chart/JPY=X"],
+  eur: ["https://query1.finance.yahoo.com/v8/finance/chart/EURJPY=X", "https://query2.finance.yahoo.com/v8/finance/chart/EURJPY=X"],
+  gbp: ["https://query1.finance.yahoo.com/v8/finance/chart/GBPJPY=X", "https://query2.finance.yahoo.com/v8/finance/chart/GBPJPY=X"],
+  chf: ["https://query1.finance.yahoo.com/v8/finance/chart/CHFJPY=X", "https://query2.finance.yahoo.com/v8/finance/chart/CHFJPY=X"],
+  cad: ["https://query1.finance.yahoo.com/v8/finance/chart/CADJPY=X", "https://query2.finance.yahoo.com/v8/finance/chart/CADJPY=X"],
+  cny: ["https://query1.finance.yahoo.com/v8/finance/chart/CNYJPY=X", "https://query2.finance.yahoo.com/v8/finance/chart/CNYJPY=X"],
+  aud: ["https://query1.finance.yahoo.com/v8/finance/chart/AUDJPY=X", "https://query2.finance.yahoo.com/v8/finance/chart/AUDJPY=X"],
 };
 
 export function parseYahooDaily(payload, { now = Date.now() } = {}) {

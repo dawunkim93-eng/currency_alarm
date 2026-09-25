@@ -62,7 +62,7 @@
   },
   "suitability": {
     "enabled": true,
-    "windows": [30, 90, 180, 365],
+    "windows": [21, 63, 126, 250],
     "goodScore": 9,
     "reportHour": 8,
     "fetchTtlMinutes": 60

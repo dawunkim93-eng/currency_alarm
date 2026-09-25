@@ -58,15 +58,17 @@ export const DEFAULTS = {
 
   /**
    * 달러·엔화 매수 적합성 (세븐스플릿 방식) — 3조건 × 4기간 = 12점 채점.
-   *   windows      판정 기간(일) — 1·3·6·12개월
+   *   windows      판정 창 — **영업일 봉 개수**(앱의 1M 이 ~21봉과 일치했다)
    *   goodScore    이 개수 이상이면 '적합' 밴드. 만점(최대 점수)은 별도 밴드.
    *   reportHour   아침 브리핑 시각(KST 시). 매일 이 시각을 지나면 하루 한 번,
    *                두 통화를 한 메시지로 보낸다 — 전환 알림은 보내지 않는다.
    *   fetchTtlMinutes  1년 일봉 캐시 시간. 일봉이라 1시간이면 충분하다.
+   * 엔 강도는 USD/JPY 단일이 아니라 주요 통화 대비 엔화 **7통화 바스켓 지수**를
+   * 자체 계산한다 — 앱의 '엔 지수'(실효환율)는 API 접근이 불가해서.
    */
   suitability: {
     enabled: true,
-    windows: [30, 90, 180, 365],
+    windows: [21, 63, 126, 250],
     goodScore: 9,
     reportHour: 8,
     fetchTtlMinutes: 60,

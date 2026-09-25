@@ -25,7 +25,7 @@ import {
 } from "./lib/sources.mjs";
 import { buildQuotes, derivedSpreads } from "./lib/venues.mjs";
 import { evaluate, findAnchor, selectAlerts } from "./lib/signals.mjs";
-import { alignByDate, dayKey, evaluateSuitability, isReportDue, toBars } from "./lib/suitability.mjs";
+import { alignByDate, buildYenIndex, dayKey, evaluateSuitability, isReportDue, toBars } from "./lib/suitability.mjs";
 import { EMPTY_STATE, applyOverrides, getPath, pushHistory, setPath } from "./lib/state.mjs";
 import { MENU_COMMANDS, handleCommand } from "./lib/commands.mjs";
 import { parseCommand, isAllowedChat } from "./lib/telegram.mjs";
@@ -995,24 +995,52 @@ test("적합성: 만점·적합·중립·부적합 밴드 경계를 지킨다", 
   assert.ok(mid.rank <= 1, `rank=${mid.rank} score=${mid.score}`);
 });
 
-test("적합성: 강도 조건 방향이 통화별로 뒤집힌다 (엔은 USD/JPY가 높을 때 O)", () => {
+test("적합성: 엔 강도는 7통화 바스켓 지수로 판정한다 (낮을수록 약세 O)", () => {
   const rateBars = seriesOf({ start: 1400, step: -0.2 });
   const now = NOW + DAY;
-  // USD/JPY 가 기간 중간값보다 높으면(엔 약세) 엔화 강도 조건은 O.
-  const jpyBars = seriesOf({ start: 150, step: 0.05 }); // 상승 추세
+  // 바스켓 — 엔지수가 하락 추세(엔 약세)면 강도 조건은 O (달러와 같은 방향).
+  const yenBars = seriesOf({ start: 100, step: -0.01 });
   const [jpy] = evaluateSuitability({
     daily: {
       jpykrw: { bars: rateBars, current: 1300 },
-      usdjpy: { bars: jpyBars, current: 158 },
+      yenIndex: { bars: yenBars, current: 92 },
     },
     config: baseConfig(),
   });
-  const strengthCheck = jpy.legs[0] ? undefined : undefined;
-  void strengthCheck;
-  // 12M 창 기준 USD/JPY 현재 > 중간값 → 강도 O. 3조건이 모두 엔에 유리한지 점수로 확인.
-  assert.ok(jpy.score >= 1, `score=${jpy.score}`);
+  // 창 전체에서 지수가 계속 하락 → 현재(92) < 최고 = 마지막 창 값… 등차 하락이라
+  // 현재 < 중간값이 아니라 최저 근처다. 강도 O 를 확정하려면 반등 꼬리를 준다.
+  const rebound = seriesOf({ start: 100, step: -0.01 });
+  rebound[rebound.length - 1].c = 99.0; // 창 최고는 이전 고점, 현재는 아래 → 강도 O
+  const [jpy2] = evaluateSuitability({
+    daily: {
+      jpykrw: { bars: rateBars, current: 1300 },
+      yenIndex: { bars: rebound, current: 92.5 },
+    },
+    config: baseConfig(),
+  });
+  assert.ok(jpy2.score >= 1, `score=${jpy2.score}`);
+  assert.equal(jpy2.id, "suit_jpy");
   // 달러 신호는 데이터가 없으니 나오지 않는다.
-  assert.equal(jpy.id, "suit_jpy");
+  assert.ok(!evaluateSuitability({
+    daily: {
+      jpykrw: { bars: rateBars, current: 1300 },
+      yenIndex: { bars: rebound, current: 92.5 },
+    },
+    config: baseConfig(),
+  }).some((s) => s.id === "suit_usd"));
+});
+
+test("적합성: buildYenIndex — 바스켓 통화가 부족하면 지수를 만들지 않는다", () => {
+  const bars = seriesOf({ start: 100, step: 0.01 });
+  const leg = { bars, current: 101 };
+  // 7통화 중 하나가 빠지면 null — 부분 데이터로 지수를 만들면 왜곡된다.
+  const partial = { usd: leg, eur: leg, gbp: leg, chf: leg, cad: leg, cny: leg };
+  assert.equal(buildYenIndex(partial), null);
+  const full = { ...partial, aud: leg };
+  const idx = buildYenIndex(full);
+  assert.ok(idx, "7통화가 다 있으면 지수가 만들어진다");
+  assert.equal(idx.bars[0].c, 100, "첫 봉은 100으로 정규화");
+  assert.equal(typeof idx.current, "number");
 });
 
 test("적합성: 날짜 정렬은 공통 날짜만 남긴다", () => {
@@ -1100,6 +1128,28 @@ test("적합성: dayKey 는 UTC 날짜로 묶는다", () => {
   assert.notEqual(dayKey(Date.UTC(2026, 8, 23, 14)), dayKey(Date.UTC(2026, 8, 24, 0)));
 });
 
+test("적합성: 야후 초 단위 timestamp 를 ms 로 정규화한다 — 창 버그 회귀", () => {
+  // 야후 chart.timestamp 는 초 단위다. 예전 버그는 ms 를 빼서 cut 이 음수가
+  // 되고, 모든 창이 1년 전체로 계산돼 4개 창 점수가 전부 같았다. 여기서 실제
+  // 모양(초 단위) 그대로 픽스처를 만들어 창이 봉 개수만큼 잘리는지 검증한다.
+  const seconds = Array.from({ length: 260 }, (_, i) => Math.floor((NOW - (259 - i) * DAY) / 1000));
+  // 마지막 봉이 "now"(NOW)에 딱 붙어 있어 오늘 봉으로 간주·제외된다 — now 를 명시.
+  const bars = toBars(seconds, Array.from({ length: 260 }, (_, i) => i + 1), NOW + 3_600_000);
+  assert.ok(bars.every((bar) => bar.t > 1e12), "t 는 ms 여야 한다");
+  assert.equal(bars.length, 259, "마지막 봉(오늘)은 제외");
+
+  // 창이 잘렸음은 '창별 점수가 다르다'로 확인한다 — 전부 동일하면 버그.
+  // 시나리오: 환율 계속 하락(모든 창에서 O), 강도는 초반 급락 후 반등이
+  //           장기 창(12M) 중간값은 넘지 않게 끝나고, 갭은 반등으로 유지.
+  //           → 장기 창만 강도 O 로 점수가 달라진다 ([2,2,2,3]).
+  const rateBars = bars.map((b, i) => ({ t: b.t, c: 1400 - i }));
+  const dxyBars = bars.map((b, i) => ({ t: b.t, c: i < 220 ? 100 - i * 0.25 : 50 + (i - 219) * 0.37 }));
+  const daily = { usdkrw: { bars: rateBars, current: 1140 }, dxy: { bars: dxyBars, current: 71.0 } };
+  const [usd] = evaluateSuitability({ daily, config: baseConfig() });
+  const scores = usd.legs.map((leg) => leg.value);
+  assert.notDeepEqual(scores, [scores[0], scores[0], scores[0], scores[0]], `창별 점수가 다르다: ${scores}`);
+});
+
 asyncTest("/적합 은 표를 만들고, 데이터 없으면 안내한다", async () => {
   const now = 4_000_000_000;
   const market = marketOf();
@@ -1111,7 +1161,7 @@ asyncTest("/적합 은 표를 만들고, 데이터 없으면 안내한다", asyn
       usdkrw: { bars: rateBars, current: 1320 },
       dxy: { bars: seriesOf({ start: 110, step: -0.02 }), current: 102.7 },
       jpykrw: { bars: rateBars, current: 8.5 },
-      usdjpy: { bars: seriesOf({ start: 150, step: 0.05 }), current: 158 },
+      yenIndex: { bars: seriesOf({ start: 100, step: -0.01 }), current: 92 },
     },
     config,
   });
@@ -1213,7 +1263,7 @@ test("브리핑은 달러·엔화를 한 메시지에 담는다", () => {
         usdkrw: { bars: rateBars, current: 1313 },
         dxy: { bars: seriesOf({ start: 110, step: -0.02 }), current: 102.4 },
         jpykrw: { bars: rateBars, current: 8.5 },
-        usdjpy: { bars: seriesOf({ start: 150, step: 0.05 }), current: 158 },
+        yenIndex: { bars: seriesOf({ start: 100, step: -0.01 }), current: 92 },
       },
       config: baseConfig(),
     }),

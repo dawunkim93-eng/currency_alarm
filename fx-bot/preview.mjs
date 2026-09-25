@@ -59,19 +59,19 @@ const signals = evaluate({ market, quotes, config, history, now });
 const DAY = 86_400_000;
 const rateBars = [];
 const dxyBars = [];
-const jpyBars = [];
-for (let i = 0; i < 400; i += 1) {
-  const t = now - (399 - i) * DAY;
-  rateBars.push({ t, c: 1400 - 0.2 * i });
-  dxyBars.push({ t, c: i < 395 ? 110 - 0.02 * i : 102.02 + (i - 395) * 0.25 });
-  jpyBars.push({ t, c: 150 + 0.05 * i });
+const yenBars = [];
+for (let i = 0; i < 260; i += 1) {
+  const t = now - (259 - i) * DAY;
+  rateBars.push({ t, c: 1400 - i });
+  dxyBars.push({ t, c: i < 250 ? 110 - i * 0.04 : 100 + (i - 249) * 0.5 });
+  yenBars.push({ t, c: 100 - i * 0.03 });
 }
 const suitSignals = evaluateSuitability({
   daily: {
     usdkrw: { bars: rateBars, current: 1313 },
-    dxy: { bars: dxyBars, current: 102.4 },
+    dxy: { bars: dxyBars, current: 101.5 },
     jpykrw: { bars: rateBars.map((bar) => ({ t: bar.t, c: bar.c / 160 })), current: 8.2 },
-    usdjpy: { bars: jpyBars, current: 158 },
+    yenIndex: { bars: yenBars, current: 92.2 },
   },
   config,
 });
