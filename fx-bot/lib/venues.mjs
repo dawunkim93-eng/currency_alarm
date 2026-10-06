@@ -3,13 +3,14 @@
  *
  * 은행·핀테크는 공개 시세 API가 없어서 모형으로 만든다.
  *
- *   내가 살 때(원화→달러)  buy  = 기준율 × (1 + 스프레드 × (1 − 매수우대율))
- *   내가 팔 때(달러→원화)  sell = 기준율 × (1 − 스프레드 × (1 − 매도우대율))
+ *   내가 살 때(원화→달러)  buy  = 기준율 × (1 + 오프셋%) × (1 + 스프레드 × (1 − 매수우대율))
+ *   내가 팔 때(달러→원화)  sell = 기준율 × (1 + 오프셋%) × (1 − 스프레드 × (1 − 매도우대율))
  *
- * 스프레드는 설정에 숫자가 없으면 **하나은행 전신환 고시에서 역산**한다
- * (ttSelling/base, base/ttBuying). 은행마다 자체 기준율이 조금씩 달라서
- * 모형값과 앱 화면이 몇십 전 어긋날 수 있는데, 그건 `/시세입력` 으로 실측을
- * 덮어쓰라고 만들어 뒀다. 모형을 진짜 고시환율인 척하지는 않는다.
+ * 오프셋(`rateOffsetPct`)은 은행마다 자체 고시가 하나은행 고시와 미세하게 다른
+ * 정도다(스위치원 -0.05% — 실측 기반). 스프레드는 설정에 숫자가 없으면 **하나은행
+ * 전신환 고시에서 역산**한다 (ttSelling/base, base/ttBuying). 모형값과 앱 화면이
+ * 몇십 전 어긋날 수 있는데, 그건 `/시세입력` 으로 실측을 덮어쓰라고 만들어 뒀다.
+ * 모형을 진짜 고시환율인 척하지는 않는다.
  *
  * 거래소는 호가창을 그대로 쓰되 **테이커 수수료를 값에 녹인다**.
  * 수수료를 빼고 비교하면 0.05%짜리 차익은 전부 허깨비가 된다.
@@ -44,13 +45,15 @@ export function buildQuotes({ market, config, manualQuotes = {}, now = Date.now(
   const ttlMs = (config.manualQuoteTtlMinutes ?? 360) * 60_000;
 
   const banks = Object.entries(config.banks ?? {}).map(([id, bank]) => {
+    // 은행별 기준율 — 자체 고시 오프셋을 먼저 녹인다(스위치원 -0.05% 등).
+    const bankBase = forex.base * (1 + (bank.rateOffsetPct ?? 0) / 100);
     const buySpread = bank.spread ?? spreads.buy;
     const sellSpread = bank.spread ?? spreads.sell;
     const quote = {
       id,
       label: bank.label ?? id,
-      buy: forex.base * (1 + buySpread * (1 - bank.prefBuy)),
-      sell: forex.base * (1 - sellSpread * (1 - bank.prefSell)),
+      buy: bankBase * (1 + buySpread * (1 - bank.prefBuy)),
+      sell: bankBase * (1 - sellSpread * (1 - bank.prefSell)),
       manual: null,
     };
 
@@ -112,13 +115,15 @@ function buildYenQuotes({ jpy, jpyc, config }) {
   const fee = config.exchanges?.upbit?.takerFee ?? 0;
 
   const banks = Object.entries(config.banks ?? {}).map(([id, bank]) => {
+    // USD 모형과 같은 오프셋·공식을 엔 기준율에 적용한다.
+    const bankBase = jpy.base * (1 + (bank.rateOffsetPct ?? 0) / 100);
     const buySpread = bank.spread ?? yenSpreads.buy;
     const sellSpread = bank.spread ?? yenSpreads.sell;
     return {
       id,
       label: bank.label ?? id,
-      buy: jpy.base * (1 + buySpread * (1 - bank.prefBuy)),
-      sell: jpy.base * (1 - sellSpread * (1 - bank.prefSell)),
+      buy: bankBase * (1 + buySpread * (1 - bank.prefBuy)),
+      sell: bankBase * (1 - sellSpread * (1 - bank.prefSell)),
       manual: null,
     };
   });

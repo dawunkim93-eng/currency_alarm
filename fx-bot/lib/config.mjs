@@ -34,9 +34,13 @@ export const DEFAULTS = {
   manualQuoteTtlMinutes: 360,
 
   banks: {
+    /** rateOffsetPct — 이 은행의 자체 기준율이 하나은행 고시 대비 얼마나 어긋나는가(%).
+     *  스위치원은 하나은행 고시 기준 100% 우대(수수료 0원, 살 때=팔 때)인데,
+     *  자체 고시가 하나은행보다 약 0.05% 낮다(2026-09-30 실측: 달러 -0.051%, 엔 -0.055%).
+     *  이 오프셋을 넣어야 스위치원이 실제보다 불리하게 모형화되지 않는다. */
     toss: { label: "토스뱅크", spread: null, prefBuy: 1.0, prefSell: 1.0 },
     kakaobank: { label: "카카오뱅크", spread: null, prefBuy: 1.0, prefSell: 1.0 },
-    switchen: { label: "스위치원", spread: null, prefBuy: 0.95, prefSell: 0.95 },
+    switchen: { label: "스위치원", spread: null, prefBuy: 1.0, prefSell: 1.0, rateOffsetPct: -0.05 },
     hana: { label: "하나은행", spread: null, prefBuy: 0.9, prefSell: 0.9 },
   },
 
@@ -205,6 +209,10 @@ export function validateConfig(config) {
     }
     if (bank.spread != null && !(bank.spread >= 0 && bank.spread < 0.2)) {
       problems.push(`banks.${id}.spread 는 비율입니다. 1% 는 0.01 로 적습니다 (지금: ${bank.spread}).`);
+    }
+    if (bank.rateOffsetPct != null && !(bank.rateOffsetPct > -5 && bank.rateOffsetPct < 5)) {
+      // 스위치원 관찰값이 -0.05(%). 비율(-0.0005)과 혼동하면 100배 오류라 여기서 잡는다.
+      problems.push(`banks.${id}.rateOffsetPct 는 퍼센트입니다. -0.05% 는 -0.05 로 적습니다 (지금: ${bank.rateOffsetPct}).`);
     }
   }
 

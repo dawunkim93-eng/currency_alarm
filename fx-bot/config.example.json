@@ -17,8 +17,9 @@
     "switchen": {
       "label": "스위치원",
       "spread": null,
-      "prefBuy": 0.95,
-      "prefSell": 0.95
+      "prefBuy": 1.0,
+      "prefSell": 1.0,
+      "rateOffsetPct": -0.05
     },
     "hana": {
       "label": "하나은행",

@@ -396,6 +396,21 @@ test("수동 입력 환율이 모형을 덮어쓰고, 유효시간이 지나면 
   assert.equal(staleSwitchen.manual, null);
 });
 
+test("USD 뱅크 모형 — 스위치원 100% 우대 + 고시 오프셋이 최저매수를 바꾼다", () => {
+  const quotes = buildQuotes({ market: marketOf(), config: baseConfig() });
+  // 토스(100% 우대, 고시 그대로): buy=sell=1390.5.
+  // 스위치원(100% 우대 + 오프셋 −0.05%): buy=sell=1389.8048 — 살 때는 제일 싸다.
+  const toss = quotes.banks.find((bank) => bank.id === "toss");
+  const hana = quotes.banks.find((bank) => bank.id === "hana");
+  const switchen = quotes.banks.find((bank) => bank.id === "switchen");
+  assert.ok(Math.abs(toss.buy - 1390.5) < 1e-9, `toss.buy=${toss.buy}`);
+  assert.ok(hana.buy > toss.buy, "우대가 낮은 곳이 더 비싸야 한다");
+  assert.ok(Math.abs(switchen.buy - 1390.5 * 0.9995) < 1e-9, `switchen.buy=${switchen.buy}`);
+  assert.ok(Math.abs(switchen.sell - 1390.5 * 0.9995) < 1e-9, "100% 우대라 사고파는 값이 같다");
+  assert.equal(quotes.bestBankBuy.id, "switchen", "김프 계산은 스위치원 매수가 기준이 된다");
+  assert.equal(quotes.bestBankSell.id, "toss", "역프 계산은 여전히 토스 매도가 기준이다");
+});
+
 test("엔 뱅크 모형은 엔 기준율에 같은 공식을 쓰고, JPYC 수수료를 녹인다", () => {
   const quotes = buildQuotes({ market: yenMarketOf(), config: baseConfig() });
   const yen = quotes.yen;
@@ -404,7 +419,11 @@ test("엔 뱅크 모형은 엔 기준율에 같은 공식을 쓰고, JPYC 수수
   const hana = yen.banks.find((bank) => bank.id === "hana");
   assert.ok(Math.abs(toss.buy - 8.637) < 1e-9, `toss.buy=${toss.buy}`);
   assert.ok(hana.buy > toss.buy, "우대가 낮은 곳이 더 비싸야 한다");
-  assert.equal(yen.bestBankBuy.id, "toss");
+  // 스위치원은 100% 우대 + 고시 오프셋 −0.05% — 최저매수는 스위치원, 최고매도는 토스다.
+  const switchen = yen.banks.find((bank) => bank.id === "switchen");
+  assert.ok(Math.abs(switchen.buy - 8.637 * 0.9995) < 1e-9, `switchen.buy=${switchen.buy}`);
+  assert.ok(Math.abs(switchen.sell - 8.637 * 0.9995) < 1e-9, `switchen.sell=${switchen.sell}`);
+  assert.equal(yen.bestBankBuy.id, "switchen");
   assert.equal(yen.bestBankSell.id, "toss");
 
   // 업비트 테이커 수수료를 JPYC 값에도 녹인다.
@@ -439,8 +458,8 @@ test("역프(테더가 쌀 때) — 달러→테더만 발동한다", () => {
 
 test("김프(테더가 비쌀 때) — 테더→달러만 발동한다", () => {
   const signals = evaluateWith({ market: marketOf({ ask: 1400.5, bid: 1400.4 }) });
-  // 1400.4 × 0.9995 / 1390.5 − 1 = +0.6616%
-  assert.ok(Math.abs(signals.to_dollar.value - 0.6616) < 0.001, `${signals.to_dollar.value}`);
+  // 매수처는 스위치원(고시×0.9995 = 1389.8048): 1400.4 × 0.9995 / 1389.8048 − 1 = +0.7120%
+  assert.ok(Math.abs(signals.to_dollar.value - 0.712) < 0.001, `${signals.to_dollar.value}`);
   assert.equal(signals.to_dollar.fired, true);
   assert.equal(signals.to_tether.fired, false);
 });
@@ -449,17 +468,20 @@ test("가격이 붙어 있으면 아무것도 발동하지 않는다", () => {
   const signals = evaluateWith({ market: marketOf({ ask: 1391.0, bid: 1390.9 }) });
   assert.equal(signals.to_tether.fired, false);
   assert.equal(signals.to_dollar.fired, false);
-  assert.ok(signals.to_tether.value < 0 && signals.to_dollar.value < 0, "수수료·스프레드 때문에 둘 다 음수여야 한다");
+  // 가격이 기준율 바로 위에 있어도, 스위치원 매수가(고시 −0.05%)가 존재해
+  // to_dollar 는 아주 살짝 양수가 될 수 있다(+0.03%). 그래도 임계(0.5%)엔 못 미친다.
+  assert.ok(signals.to_tether.value < 0, "역프 쪽은 음수여야 한다");
+  assert.ok(signals.to_dollar.value < 0.5, "올라와도 임계 밖이어야 한다");
 });
 
 // ── 엔화·JPYC 신호 ────────────────────────────────────────────────────
 test("JPYC가 엔보다 싸면 엔→JPYC만 발동한다 (엔 역프)", () => {
   const signals = evaluateWith({ market: yenMarketOf() });
-  // 엔 매도 8.637 (우대 100%라 기준율 그대로) / JPYC 매수 8.55×1.0005 = 8.554275
-  // 8.637 / 8.554275 − 1 = +0.9672%
+  // 엔 매도처는 토스(8.637 — 스위치원은 오프셋 −0.05%라 최고매도는 토스 유지)
+  // / JPYC 매수 8.55×1.0005 = 8.554275 → 8.637 / 8.554275 − 1 = +0.9672%
   assert.ok(Math.abs(signals.yen_to_jpyc.value - 0.9672) < 0.001, `${signals.yen_to_jpyc.value}`);
   assert.equal(signals.yen_to_jpyc.fired, true);
-  // JPYC 매도 8.54×0.9995 = 8.53573 / 엔 매수 8.637 − 1 = −1.172%
+  // JPYC 매도 8.54×0.9995 = 8.53573 / 스위치원 엔 매수 8.63268 − 1 = −1.1231%
   assert.ok(signals.jpyc_to_yen.value < 0, `${signals.jpyc_to_yen.value}`);
   assert.equal(signals.jpyc_to_yen.fired, false);
   // USD 쪽 신호는 여전히 정상 계산된다.
@@ -468,15 +490,15 @@ test("JPYC가 엔보다 싸면 엔→JPYC만 발동한다 (엔 역프)", () => {
 
 test("JPYC가 엔보다 비싸면 JPYC→엔만 발동한다 (엔 김프)", () => {
   const signals = evaluateWith({ market: yenMarketOf({ jpycAsk: 8.75, jpycBid: 8.74 }) });
-  // JPYC 매도 8.74×0.9995 = 8.73563 / 엔 매수 8.637 − 1 = +1.1419%
-  assert.ok(Math.abs(signals.jpyc_to_yen.value - 1.1419) < 0.002, `${signals.jpyc_to_yen.value}`);
+  // JPYC 매도 8.74×0.9995 = 8.73563 / 스위치원 엔 매수 8.63268 − 1 = +1.1925%
+  assert.ok(Math.abs(signals.jpyc_to_yen.value - 1.1925) < 0.002, `${signals.jpyc_to_yen.value}`);
   assert.equal(signals.jpyc_to_yen.fired, true);
-  // JPYC 매수 8.75×1.0005 = 8.754375 / 엔 매도 8.637 − 1 = −1.3415%
+  // JPYC 매수 8.75×1.0005 = 8.754375 / 토스 엔 매도 8.637 − 1 = −1.3415%
   assert.equal(signals.yen_to_jpyc.fired, false);
 });
 
 test("엔화·JPYC 임계값 언저리 — 0.49% 는 안 울리고 0.51% 는 울린다", () => {
-  // 목표 수익률 r 을 만드는 JPYC ask: yenSell / (ask × (1+fee)) − 1 = r
+  // 목표 수익률 r 을 만드는 JPYC ask: 토스 엔 매도 / (ask × (1+fee)) − 1 = r
   const askFor = (r) => 8.637 / (1 + r / 100) / 1.0005;
   const below = evaluateWith({ market: yenMarketOf({ jpycAsk: askFor(0.49), jpycBid: 8.54 }) });
   const above = evaluateWith({ market: yenMarketOf({ jpycAsk: askFor(0.51), jpycBid: 8.54 }) });
@@ -504,9 +526,12 @@ test("임계값 언저리 — 0.49% 는 안 울리고 0.51% 는 울린다", () =
   assert.equal(above.to_tether.fired, true, `위쪽 ${above.to_tether.value}`);
 });
 
-test("같은 은행이 최저매수이자 최고매도면 은행 간 차익 신호를 만들지 않는다", () => {
+test("스위치원 오프셋이 벌려놓은 은행 간 격차는 임계에 못 미쳐 알리지 않는다", () => {
+  // 스위치원(고시 −0.05%)이 최저매수, 토스가 최고매도 → 격차 +0.05%.
+  // bankGapPct(0.2%) 미달이라 신호는 생기지만 발동하지 않는다.
   const signals = evaluateWith({ market: marketOf() });
-  assert.equal(signals.bank_gap, undefined);
+  assert.ok(Math.abs(signals.bank_gap.value - 0.05) < 0.001, `${signals.bank_gap?.value}`);
+  assert.equal(signals.bank_gap.fired, false);
 });
 
 test("실측 입력으로 은행이 갈리면 은행 간 차익이 잡힌다", () => {
@@ -516,9 +541,10 @@ test("실측 입력으로 은행이 갈리면 은행 간 차익이 잡힌다", (
     now,
     manualQuotes: { switchen: { sell: 1395.0, at: now } },
   });
-  // 1395 / 1390.5 − 1 = +0.3236% ≥ 0.2%
-  assert.ok(Math.abs(signals.bank_gap.value - 0.3236) < 0.001, `${signals.bank_gap.value}`);
-  assert.equal(signals.bank_gap.fired, true);
+  // 실측 매도 1395(스위치원) / 최저 매수 1389.8048(스위치원)… 실측은 매도만 넣었으니
+  // 최저매수는 여전히 스위치원 모형. 같은 은행이 양쪽이면 감싸고 — 아니, 같은 은행이면 신호 없음.
+  // bestBankSell = 스위치원(실측 1395), bestBankBuy = 스위치원(모형 1389.8) → 같은 은행이라 bank_gap 없음!
+  assert.equal(signals.bank_gap, undefined, "양쪽 다 스위치원이면 은행 간 신호는 없다");
 });
 
 test("거래소가 둘일 때 교차 차익을 잡는다", () => {
