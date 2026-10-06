@@ -603,6 +603,7 @@ test("기록이 하나뿐이면 급변동을 판단하지 않는다", () => {
 // ── 4. 알림 — 전환·해제·리마인드 ─────────────────────────────────────
 const fakeSignal = (value, fired = true, extra = {}) => ({
   id: "to_tether",
+  kind: "arb",
   value,
   fired,
   threshold: 0.5,
@@ -620,20 +621,21 @@ test("처음 뜬 신호는 바로 보낸다", () => {
   assert.equal(nextAlerts.to_tether.active, true);
 });
 
-test("발동이 유지되면 조용하고, 해제될 때만 한 번 알린다", () => {
+test("발동이 유지되면 조용하고(단계 아래에서), 해제될 때만 한 번 알린다", () => {
   const t0 = 1000;
   const first = selectAlerts({ signals: [fakeSignal(0.6)], state: { ...EMPTY_STATE }, config: baseConfig(), now: t0 });
   assert.equal(first.fresh.length, 1);
+  assert.equal(first.nextAlerts.to_tether.stepCount, 0, "전환 시점엔 단계 0 (0.75 전)");
   const stateAfter = { alerts: first.nextAlerts };
 
-  // 값이 깊어져도(0.6 → 0.9) 무음 — 예전의 쿨다운·escalation 재전송은 없다.
+  // 단계(0.75)에 못 미치는 깊어짐(0.6 → 0.7)은 무음.
   const still = selectAlerts({
-    signals: [fakeSignal(0.9)],
+    signals: [fakeSignal(0.7)],
     state: stateAfter,
     config: baseConfig(),
     now: t0 + 5 * 60_000,
   });
-  assert.equal(still.fresh.length, 0, "발동 지속은 리마인드 전까지 무음");
+  assert.equal(still.fresh.length, 0, "단계 사이의 변화는 무음");
   assert.equal(still.nextAlerts.to_tether.active, true);
 
   // 마진 안(0.5 − 0.05 = 0.45 위)에서 꺼져도 해제 확정이 아니다 — 경계 부유 무음.
@@ -756,6 +758,83 @@ test("recoverNotice 를 끄면 해제 메시지는 없어도 상태는 바뀐다
   // 그러면 다음 발동은 전환으로 다시 알린다.
   const refire = selectAlerts({ signals: [fakeSignal(0.6)], state: { ...nextAlerts }, config, now: t0 + 120_000 });
   assert.equal(refire.fresh.length, 1);
+});
+
+// ── 단계(step) 확대 알림 ──────────────────────────────────────────────
+test("단계 확대 — 0.75·1.0·1.25 에 각각 한 번씩 알린다", () => {
+  const t0 = 1000;
+  const cfg = baseConfig(); // stepPct 0.25
+  const first = selectAlerts({ signals: [fakeSignal(0.6)], state: { ...EMPTY_STATE }, config: cfg, now: t0 });
+  assert.equal(first.nextAlerts.to_tether.stepCount, 0);
+
+  // 0.75 도달 — 첫 단계 알림.
+  const s1 = selectAlerts({ signals: [fakeSignal(0.75)], state: { alerts: first.nextAlerts }, config: cfg, now: t0 + 60_000 });
+  assert.equal(s1.fresh.length, 1);
+  assert.equal(s1.fresh[0].step, true, "단계 알림으로 표시되어야 한다");
+  assert.equal(s1.nextAlerts.to_tether.stepCount, 1);
+
+  // 0.75 근처 왕복(0.74 → 0.76)은 재알림 없다 — 같은 단계.
+  const s1b = selectAlerts({ signals: [fakeSignal(0.74)], state: { alerts: s1.nextAlerts }, config: cfg, now: t0 + 120_000 });
+  assert.equal(s1b.fresh.length, 0, "0.74 로 빠져도 단계는 유지");
+  const s1c = selectAlerts({ signals: [fakeSignal(0.76)], state: { alerts: s1b.nextAlerts }, config: cfg, now: t0 + 180_000 });
+  assert.equal(s1c.fresh.length, 0, "같은 단계 재교차는 무음");
+
+  // 1.0 도달 — 두 번째 단계.
+  const s2 = selectAlerts({ signals: [fakeSignal(1.0)], state: { alerts: s1c.nextAlerts }, config: cfg, now: t0 + 240_000 });
+  assert.equal(s2.fresh.length, 1);
+  assert.equal(s2.nextAlerts.to_tether.stepCount, 2);
+
+  // 1.25 도달 — 세 번째 단계.
+  const s3 = selectAlerts({ signals: [fakeSignal(1.3)], state: { alerts: s2.nextAlerts }, config: cfg, now: t0 + 300_000 });
+  assert.equal(s3.fresh.length, 1);
+  assert.equal(s3.nextAlerts.to_tether.stepCount, 3, "1.3 은 세 번째 단계(1.25+)로 기록");
+});
+
+test("단계 도약 — 여러 단계를 건너뛰면 1통만 온다", () => {
+  const t0 = 1000;
+  const cfg = baseConfig();
+  const first = selectAlerts({ signals: [fakeSignal(0.6)], state: { ...EMPTY_STATE }, config: cfg, now: t0 });
+  // 0.6 에서 바로 1.5 로 — 0.75·1.0·1.25·1.5(?) 네 단계 넘었지만 알림은 1통.
+  const jump = selectAlerts({ signals: [fakeSignal(1.5)], state: { alerts: first.nextAlerts }, config: cfg, now: t0 + 60_000 });
+  assert.equal(jump.fresh.length, 1);
+  assert.equal(jump.nextAlerts.to_tether.stepCount, 4, "1.5 는 네 번째 단계");
+  // 직후 같은 값이면 무음.
+  const same = selectAlerts({ signals: [fakeSignal(1.5)], state: { alerts: jump.nextAlerts }, config: cfg, now: t0 + 120_000 });
+  assert.equal(same.fresh.length, 0);
+});
+
+test("해제하면 단계가 초기화된다 — 재발동 후 첫 단계부터 다시 알림", () => {
+  const t0 = 1000;
+  const cfg = baseConfig();
+  const first = selectAlerts({ signals: [fakeSignal(0.8)], state: { ...EMPTY_STATE }, config: cfg, now: t0 });
+  assert.equal(first.nextAlerts.to_tether.stepCount, 1); // 전환 시 0.75 단계 기록
+
+  const released = selectAlerts({ signals: [fakeSignal(0.2, false)], state: { alerts: first.nextAlerts }, config: cfg, now: t0 + 60_000 });
+  assert.equal(released.nextAlerts.to_tether.stepCount, 0, "해제 시 단계 초기화");
+
+  const refire = selectAlerts({ signals: [fakeSignal(0.6)], state: { alerts: released.nextAlerts }, config: cfg, now: t0 + 120_000 });
+  assert.equal(refire.nextAlerts.to_tether.stepCount, 0);
+  const s1 = selectAlerts({ signals: [fakeSignal(0.77)], state: { alerts: refire.nextAlerts }, config: cfg, now: t0 + 180_000 });
+  assert.equal(s1.fresh.length, 1, "재발동 후 0.75 단계는 다시 알린다");
+  assert.equal(s1.nextAlerts.to_tether.stepCount, 1);
+});
+
+test("stepPct 0 이면 단계 알림을 끈다 (전환·해제·리마인드만)", () => {
+  const cfg = deepMerge(baseConfig(), { alerts: { stepPct: 0 } });
+  const t0 = 1000;
+  const first = selectAlerts({ signals: [fakeSignal(0.6)], state: { ...EMPTY_STATE }, config: cfg, now: t0 });
+  const deep = selectAlerts({ signals: [fakeSignal(2.0)], state: { alerts: first.nextAlerts }, config: cfg, now: t0 + 60_000 });
+  assert.equal(deep.fresh.length, 0, "stepPct 0 은 단계 알림 없음");
+  assert.equal(deep.nextAlerts.to_tether.active, true);
+});
+
+test("단계 알림은 급변동(move) 신호에는 적용되지 않는다", () => {
+  const cfg = baseConfig();
+  const t0 = 1000;
+  const moveSignal = (value, fired = true) => ({ id: "move", kind: "move", value, signed: value, fired, threshold: 0.4 });
+  const first = selectAlerts({ signals: [moveSignal(0.5)], state: { ...EMPTY_STATE }, config: cfg, now: t0 });
+  const later = selectAlerts({ signals: [moveSignal(1.2)], state: { alerts: first.nextAlerts }, config: cfg, now: t0 + 60_000 });
+  assert.equal(later.fresh.length, 0, "move 는 단계 알림 대상이 아니다");
 });
 
 // ── 5. 상태 ───────────────────────────────────────────────────────────

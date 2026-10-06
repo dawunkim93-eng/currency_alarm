@@ -33,6 +33,7 @@ const SETTABLE = new Set([
   "digest.quietHours.from",
   "digest.quietHours.to",
   "alerts.reminderHours",
+  "alerts.stepPct",
   "alerts.releaseMarginPct",
   "alerts.recoverNotice",
 ]);

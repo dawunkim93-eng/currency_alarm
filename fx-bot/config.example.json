@@ -70,6 +70,7 @@
   },
   "alerts": {
     "reminderHours": 24,
+    "stepPct": 0.25,
     "releaseMarginPct": 0.05,
     "recoverNotice": true
   },

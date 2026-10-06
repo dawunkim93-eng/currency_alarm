@@ -229,26 +229,28 @@ export function evaluate({ market, quotes, config, history = [], now = Date.now(
 /**
  * 알림 판정 — 상태 **전환** 중심.
  *
- * 규칙은 셋뿐이다.
+ * arb 신호(김프·역프·JPYC)의 규칙은 넷이다.
  *   1) 처음 뜬 신호는 바로 보낸다 (미발동 → 발동, 예: 김프 → 역프 전환)
  *   2) 풀린 신호는 한 번 해제 알림을 보낸다 (발동 → 미발동)
  *      단, 값이 임계 바로 아래에서 왔다갔다하면 발동↔해제가 도배된다.
  *      그래서 해제는 기준보다 `releaseMarginPct` 만큼 아래로 내려와야 확정한다 —
  *      경계 부유 구간은 조용히 유지된다.
- *   3) 발동이 오래 지속되면 `reminderHours` 마다 한 번 리마인드를 보낸다.
- *      전환이 없어도 "지금 역프 중"임을 잊지 않게 하기 위해서다.
+ *   3) 발동이 유지되며 값이 임계에서 `stepPct`(기본 0.25%p) 간격으로 깊어질
+ *      때마다 한 번 단계 알림을 보낸다 (0.75 → 1.0 → 1.25 …). 임계 위의
+ *      몇 단계에 이미 도달해 있으면 그 단계들은 소급 없이 기록만 하고,
+ *      **새 단계에 처음 닿을 때만** 알린다 — 같은 단계를 왕복하는 재알림은 없다.
+ *   4) 전환이 없어도 발동이 `reminderHours` 동안 유지되면 리마인드를 보낸다.
+ *      단계 알림이 오면 그 시점부터 리마인드 타이머가 다시 센다.
  *
  * 적합성(kind: suitability)은 여기서 다루지 않는다 — 느린 지표를 전환 알림으로
  * 보내면 소음이 되고, 대신 **매일 아침 `suitability.reportHour` 시에 브리핑**으로
  * 한 번 보낸다(index.mjs 의 isReportDue). 여기서는 조용히 건너뛴다.
- *
- * 예전의 쿨다운 재전송·escalation 재알림은 소음의 원인이라 없앴다. 발동이 유지
- * 되는 동안 값이 깊어져도 무음이다 — 현재 수치는 /신호 로 언제든 볼 수 있다.
  */
 export function selectAlerts({ signals, state, config, now = Date.now() }) {
   const alerts = config.alerts ?? {};
   const reminderMs = (alerts.reminderHours ?? 24) * 3_600_000;
   const releaseMargin = alerts.releaseMarginPct ?? 0.05;
+  const stepPct = typeof alerts.stepPct === "number" && alerts.stepPct > 0 ? alerts.stepPct : 0;
   const fresh = [];
   const recovered = [];
   const nextAlerts = { ...(state.alerts ?? {}) };
@@ -260,15 +262,28 @@ export function selectAlerts({ signals, state, config, now = Date.now() }) {
 
     if (signal.fired) {
       if (!previous?.active) {
-        // 전환 (미발동 → 발동)
+        // 전환 (미발동 → 발동). 임계 위의 이미 통과한 단계는 그대로 기록 —
+        // 나중에 그 단계를 왕복해도 재알림이 없다.
         fresh.push(signal);
-        nextAlerts[signal.id] = { active: true, at: now, value: signal.value };
+        nextAlerts[signal.id] = { active: true, at: now, value: signal.value, stepCount: crossedSteps(signal, stepPct) };
         continue;
       }
+      // 단계 확대 — 새 단계에 처음 닿을 때만. 김프·역프처럼 임계 위에서 깊어지는
+      // 차익 신호(kind: arb)에만 적용한다 — 급변동·지정가는 자체 의미가 달라 제외.
+      // 여러 단계를 한 틱에 건너뛰어도 1통.
+      if (stepPct > 0 && signal.kind === "arb" && typeof signal.threshold === "number") {
+        const lastStep = previous.stepCount ?? crossedSteps({ value: previous.value, threshold: signal.threshold }, stepPct);
+        const nowStep = crossedSteps(signal, stepPct);
+        if (nowStep > lastStep) {
+          fresh.push({ ...signal, step: true });
+          nextAlerts[signal.id] = { active: true, at: now, value: signal.value, stepCount: nowStep };
+          continue;
+        }
+      }
+      // 발동 지속 리마인드 — 전환도 단계도 아닐 때 "아직 켜져 있다"를 주기적으로.
       if (now - (previous.at ?? now) >= reminderMs) {
-        // 발동 지속 리마인드 — 전환은 아니지만 "아직 켜져 있다"를 하루 한 번 알린다.
         fresh.push({ ...signal, reminder: true });
-        nextAlerts[signal.id] = { active: true, at: now, value: signal.value };
+        nextAlerts[signal.id] = { active: true, at: now, value: signal.value, stepCount: previous.stepCount ?? 0 };
       }
       continue;
     }
@@ -278,13 +293,20 @@ export function selectAlerts({ signals, state, config, now = Date.now() }) {
       const marginOk = signal.threshold == null || signal.value < signal.threshold - releaseMargin;
       if (marginOk) {
         if (config.alerts.recoverNotice) recovered.push(signal);
-        nextAlerts[signal.id] = { active: false, at: now, value: signal.value };
+        nextAlerts[signal.id] = { active: false, at: now, value: signal.value, stepCount: 0 };
       }
       // 마진 안(경계 부유)이면 상태를 유지한다 — 알림도 기록도 조용히.
     }
   }
 
   return { fresh, recovered, nextAlerts };
+}
+
+/** 임계 위로 몇 개의 단계(임계 + stepPct × k)를 통과했는가. k=1부터 센다 — 0.75%는 1단계. */
+function crossedSteps(signal, stepPct) {
+  if (stepPct <= 0 || typeof signal.threshold !== "number" || typeof signal.value !== "number") return 0;
+  // 부동소수 오차 방지용 미세 여유를 더해 0.7499999 가 1단계로 안 세지는 것을 막는다.
+  return Math.max(0, Math.floor((signal.value - signal.threshold) / stepPct + 1e-9));
 }
 
 const pct = (ratio) => ratio * 100;

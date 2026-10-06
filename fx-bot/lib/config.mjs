@@ -104,6 +104,9 @@ export const DEFAULTS = {
   alerts: {
     /** 발동이 이 시간(기본 24) 지속되면 리마인드를 하루(이 주기)마다 한 번 보낸다. */
     reminderHours: 24,
+    /** 단계 확대 간격(%p). 발동이 유지되며 임계에서 이만큼씩 깊어질 때마다
+     *  한 번 알린다 (0.5% 발동 → 0.75 · 1.0 · 1.25 …). 0 이면 끔. */
+    stepPct: 0.25,
     /** 해제 확정 마진(%p). 임계 바로 아래에서 부유하는 발동↔해제 도배를 막는다 —
      *  해제는 기준보다 이만큼 아래로 내려와야 확정된다. */
     releaseMarginPct: 0.05,
@@ -239,5 +242,11 @@ export function validateConfig(config) {
   if (suit.windows != null && (!Array.isArray(suit.windows) || !suit.windows.length || suit.windows.some((d) => typeof d !== "number" || d < 7))) {
     problems.push("suitability.windows 는 7일 이상의 일수 배열이어야 합니다 (예: [30, 90, 180, 365]).");
   }
+
+  const stepPct = config.alerts?.stepPct;
+  if (stepPct != null && (!(stepPct >= 0) || stepPct > 5)) {
+    problems.push(`alerts.stepPct 는 퍼센트 간격입니다. 0.25%p 는 0.25 로 적습니다 (지금: ${stepPct}).`);
+  }
+
   return problems;
 }
